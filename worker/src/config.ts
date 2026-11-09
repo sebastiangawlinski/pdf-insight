@@ -2,7 +2,7 @@
 export interface Env {
   /** Binding Cloudflare Workers AI — główny dostawca, bez klucza API. */
   AI?: Ai;
-  /** Model w Workers AI, np. "@cf/meta/llama-3.3-70b-instruct-fp8-fast". */
+  /** Model w Workers AI, np. "@cf/google/gemma-4-26b-a4b-it". */
   WORKERS_AI_MODEL?: string;
 
   /** Sekret: klucz API dostawcy zapasowego (Groq). Nigdy nie trafia do frontendu ani do repozytorium. */
@@ -47,7 +47,7 @@ export const LIMITS = {
 } as const;
 
 /** Domyślny model Workers AI (jeśli nie ustawiono WORKERS_AI_MODEL). */
-export const DEFAULT_WORKERS_AI_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+export const DEFAULT_WORKERS_AI_MODEL = '@cf/google/gemma-4-26b-a4b-it';
 
 /**
  * Wersja promptu i reguł analizy. Wchodzi do klucza pamięci podręcznej — zmiana promptu
