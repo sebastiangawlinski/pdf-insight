@@ -2,12 +2,15 @@
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Szczegóły techniczne (np. co zawiodło u którego dostawcy AI) — pomagają w diagnozie. */
+  readonly details: string | undefined;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -43,7 +46,13 @@ export function jsonResponse(body: unknown, status: number, headers: Headers): R
 
 export function errorResponse(error: ApiError, headers: Headers): Response {
   return jsonResponse(
-    { error: { code: error.code, message: error.message } },
+    {
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.details === undefined ? {} : { details: error.details }),
+      },
+    },
     error.status,
     headers,
   );

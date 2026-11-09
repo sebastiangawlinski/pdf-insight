@@ -7,6 +7,8 @@ import {
   estimateTokens,
   extractWorkersAiText,
   ProviderError,
+  stripThinking,
+  thinkingOptions,
   workersAiProvider,
   type ChatMessage,
   type Provider,
@@ -63,6 +65,20 @@ describe('completeWithFallback', () => {
     expect(a.complete).not.toHaveBeenCalled();
   });
 
+  it('błąd zawiera diagnostykę: co zawiodło u którego dostawcy', async () => {
+    const big: ChatMessage[] = [{ role: 'user', content: 'x'.repeat(30_000) }];
+    const a = fakeProvider('A', new ProviderError('timeout', 'przekroczony czas odpowiedzi'));
+    const b = fakeProvider('B', '{"b":1}', 4_500);
+    const error: unknown = await completeWithFallback([a.provider, b.provider], big).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    const details = (error as ApiError).details ?? '';
+    expect(details).toContain('A (A-model): przekroczony czas odpowiedzi');
+    expect(details).toContain('B (B-model): pominięty');
+    expect((error as ApiError).status).toBe(504);
+  });
+
   it('gdy wszyscy wyczerpali limit — czytelny błąd 429', async () => {
     const a = fakeProvider('A', new ProviderError('rate_limit', 'limit'));
     const b = fakeProvider('B', new ProviderError('unavailable', 'down'));
@@ -99,6 +115,33 @@ describe('workersAiProvider', () => {
       'm',
     );
     await expect(provider.complete(messages)).rejects.toMatchObject({ failure: 'unavailable' });
+  });
+});
+
+describe('tryb myślenia', () => {
+  it('wyłącza myślenie dla Gemmy 4, dla innych modeli nic nie dodaje', () => {
+    expect(thinkingOptions('@cf/google/gemma-4-26b-a4b-it')).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(thinkingOptions('@cf/meta/llama-3.3-70b-instruct-fp8-fast')).toEqual({});
+  });
+
+  it('przekazuje parametr do Workers AI', async () => {
+    let sentInputs: unknown;
+    const run = (_: string, inputs: unknown) => {
+      sentInputs = inputs;
+      return Promise.resolve({ response: '{}' });
+    };
+    await workersAiProvider(fakeAi(run), '@cf/google/gemma-4-26b-a4b-it').complete(messages);
+    expect(sentInputs).toMatchObject({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+  });
+
+  it('usuwa blok „myśli” z odpowiedzi przed odczytem JSON', () => {
+    expect(stripThinking('<|channel>thought\nplan {a}<channel|>{"ok":1}')).toBe('{"ok":1}');
+    expect(stripThinking('<think>hmm {x}</think>\n{"ok":2}')).toBe('{"ok":2}');
+    expect(stripThinking('{"ok":3}')).toBe('{"ok":3}');
   });
 });
 

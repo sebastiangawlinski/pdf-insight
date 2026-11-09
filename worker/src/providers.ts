@@ -47,12 +47,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new ProviderError('timeout', 'Przekroczono czas odpowiedzi'));
+      reject(new ProviderError('timeout', 'przekroczony czas odpowiedzi'));
     }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
   });
+}
+
+/**
+ * Usuwa „myśli” modelu, jeśli trafiły do odpowiedzi (np. blok <|channel>thought…<channel|>
+ * w Gemmie 4 albo <think>…</think>) — mogłyby zawierać nawiasy klamrowe i zepsuć odczyt JSON.
+ */
+export function stripThinking(text: string): string {
+  return text
+    .replace(/<\|channel>thought[\s\S]*?<channel\|>/g, '')
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .trim();
+}
+
+/** Dodatkowe parametry dla modeli z trybem „myślenia” — wyłączamy go, bo wydłuża odpowiedź. */
+export function thinkingOptions(model: string): Record<string, unknown> {
+  return /gemma-4/i.test(model) ? { chat_template_kwargs: { enable_thinking: false } } : {};
 }
 
 /** Wyciąga tekst odpowiedzi z różnych formatów zwracanych przez modele Workers AI. */
@@ -91,6 +107,7 @@ export function workersAiProvider(ai: Ai, model: string): Provider {
             max_tokens: LIMITS.maxOutputTokens,
             temperature: 0.1,
             response_format: { type: 'json_object' },
+            ...thinkingOptions(model),
           }),
           LIMITS.llmTimeoutMs,
         );
@@ -101,10 +118,10 @@ export function workersAiProvider(ai: Ai, model: string): Provider {
         const failure: ProviderFailure = /3036|3040|limit|capacity|429/i.test(message)
           ? 'rate_limit'
           : 'unavailable';
-        throw new ProviderError(failure, `Workers AI: ${message.slice(0, 200)}`);
+        throw new ProviderError(failure, message.replace(/\s+/g, ' ').slice(0, 160));
       }
-      const text = extractWorkersAiText(result);
-      if (text.trim() === '') throw new ProviderError('unavailable', 'Workers AI: pusta odpowiedź');
+      const text = stripThinking(extractWorkersAiText(result));
+      if (text === '') throw new ProviderError('unavailable', 'pusta odpowiedź');
       return text;
     },
   };
@@ -146,22 +163,21 @@ export function openAiCompatibleProvider(options: {
         });
       } catch (error) {
         if (error instanceof DOMException && error.name === 'TimeoutError') {
-          throw new ProviderError('timeout', `${name}: przekroczono czas odpowiedzi`);
+          throw new ProviderError('timeout', 'przekroczony czas odpowiedzi');
         }
-        throw new ProviderError('unavailable', `${name}: brak połączenia`);
+        throw new ProviderError('unavailable', 'brak połączenia');
       }
 
-      if (response.status === 429) throw new ProviderError('rate_limit', `${name}: limit`);
-      if (response.status === 413) throw new ProviderError('too_large', `${name}: za duże`);
+      if (response.status === 429) throw new ProviderError('rate_limit', 'wyczerpany limit (429)');
+      if (response.status === 413) throw new ProviderError('too_large', 'zapytanie za duże (413)');
       if (!response.ok) {
-        throw new ProviderError('unavailable', `${name}: błąd ${response.status}`);
+        throw new ProviderError('unavailable', `błąd HTTP ${response.status}`);
       }
       const data: ChatCompletionResponse = await response.json();
       const content = data.choices?.[0]?.message?.content;
-      if (typeof content !== 'string' || content.trim() === '') {
-        throw new ProviderError('unavailable', `${name}: pusta odpowiedź`);
-      }
-      return content;
+      const text = typeof content === 'string' ? stripThinking(content) : '';
+      if (text === '') throw new ProviderError('unavailable', 'pusta odpowiedź');
+      return text;
     },
   };
 }
@@ -211,36 +227,55 @@ export async function completeWithFallback(
 
   const tokens = estimateTokens(messages);
   const failures: ProviderFailure[] = [];
+  // Diagnostyka: co zawiodło u którego dostawcy (i po jakim czasie) — trafia do komunikatu błędu.
+  const details: string[] = [];
 
   for (let index = startIndex; index < providers.length; index++) {
     const provider = providers[index];
     if (provider === undefined) continue;
+    const label = `${provider.name} (${provider.model.split('/').pop() ?? provider.model})`;
     if (provider.maxInputTokens !== null && tokens > provider.maxInputTokens) {
       failures.push('too_large');
+      details.push(`${label}: pominięty — dokument za duży dla limitu tokenów`);
       continue;
     }
+    const started = Date.now();
     try {
       return { text: await provider.complete(messages), provider, index };
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
       failures.push(error.failure);
+      const seconds = ((Date.now() - started) / 1000).toFixed(1).replace('.', ',');
+      details.push(`${label}: ${error.message} (po ${seconds} s)`);
     }
   }
 
+  const summary = details.join('; ');
   if (failures.includes('rate_limit')) {
     throw new ApiError(
       429,
       'llm_rate_limited',
       'Dzienny limit darmowych usług AI został chwilowo wyczerpany. Spróbuj ponownie później.',
+      summary,
     );
   }
   if (failures.every((failure) => failure === 'too_large')) {
-    throw new ApiError(413, 'llm_too_large', 'Dokument jest zbyt długi dla dostępnych modeli AI.');
+    throw new ApiError(
+      413,
+      'llm_too_large',
+      'Dokument jest zbyt długi dla dostępnych modeli AI.',
+      summary,
+    );
   }
   if (failures.includes('timeout')) {
-    throw new ApiError(504, 'llm_timeout', 'Model AI nie odpowiedział na czas. Spróbuj ponownie.');
+    throw new ApiError(
+      504,
+      'llm_timeout',
+      'Model AI nie odpowiedział na czas. Spróbuj ponownie.',
+      summary,
+    );
   }
-  throw new ApiError(502, 'llm_unavailable', 'Usługa AI jest chwilowo niedostępna.');
+  throw new ApiError(502, 'llm_unavailable', 'Usługa AI jest chwilowo niedostępna.', summary);
 }
 
 /**

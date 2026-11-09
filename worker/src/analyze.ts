@@ -83,10 +83,13 @@ async function requestValidated<T>(
   ];
 
   let startIndex = 0;
+  let lastProblem = '';
+  let lastProvider = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
     const completion = await completeWithFallback(ctx.providers, messages, startIndex);
     startIndex = completion.index;
     ctx.used.add(`${completion.provider.name} / ${completion.provider.model}`);
+    lastProvider = `${completion.provider.name} (${completion.provider.model})`;
 
     let problem: string;
     try {
@@ -96,6 +99,7 @@ async function requestValidated<T>(
     } catch {
       problem = 'The response was not valid JSON.';
     }
+    lastProblem = problem;
     messages.push(
       { role: 'assistant', content: completion.text },
       {
@@ -109,6 +113,7 @@ async function requestValidated<T>(
     502,
     'invalid_ai_response',
     'Model AI dwukrotnie zwrócił dane niezgodne ze schematem. Spróbuj ponownie.',
+    `${lastProvider}: ${lastProblem.slice(0, 300)}`,
   );
 }
 
