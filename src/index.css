@@ -526,24 +526,6 @@ a {
   max-width: 50ch;
 }
 
-.error__details {
-  max-width: 60ch;
-  font-size: 0.85rem;
-  color: var(--muted);
-  text-align: left;
-}
-
-.error__details summary {
-  cursor: pointer;
-  text-align: center;
-}
-
-.error__details ul {
-  margin: 0.5rem 0 0;
-  padding-left: 1.2rem;
-  overflow-wrap: anywhere;
-}
-
 .error .actions {
   justify-content: center;
   margin-top: 0.5rem;

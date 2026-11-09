@@ -65,20 +65,6 @@ describe('completeWithFallback', () => {
     expect(a.complete).not.toHaveBeenCalled();
   });
 
-  it('błąd zawiera diagnostykę: co zawiodło u którego dostawcy', async () => {
-    const big: ChatMessage[] = [{ role: 'user', content: 'x'.repeat(30_000) }];
-    const a = fakeProvider('A', new ProviderError('timeout', 'przekroczony czas odpowiedzi'));
-    const b = fakeProvider('B', '{"b":1}', 4_500);
-    const error: unknown = await completeWithFallback([a.provider, b.provider], big).catch(
-      (e: unknown) => e,
-    );
-    expect(error).toBeInstanceOf(ApiError);
-    const details = (error as ApiError).details ?? '';
-    expect(details).toContain('A (A-model): przekroczony czas odpowiedzi');
-    expect(details).toContain('B (B-model): pominięty');
-    expect((error as ApiError).status).toBe(504);
-  });
-
   it('gdy wszyscy wyczerpali limit — czytelny błąd 429', async () => {
     const a = fakeProvider('A', new ProviderError('rate_limit', 'limit'));
     const b = fakeProvider('B', new ProviderError('unavailable', 'down'));

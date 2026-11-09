@@ -44,9 +44,6 @@ Przeglądarka (GitHub Pages)              Cloudflare Worker                     
   (`openai/gpt-oss-120b`, potem `openai/gpt-oss-20b`; dowolne API zgodne z OpenAI Chat Completions).
 - **Pamięć podręczna** — Cloudflare KV: ten sam dokument drugi raz = natychmiastowy wynik bez
   zużywania limitów AI.
-- **Diagnostyka** — gdy analiza się nie uda, widok błędu ma zwijaną sekcję „Szczegóły techniczne”:
-  co zawiodło u którego dostawcy i po ilu sekundach (np. przekroczony czas, wyczerpany limit,
-  dokument za duży).
 
 ### Struktura
 

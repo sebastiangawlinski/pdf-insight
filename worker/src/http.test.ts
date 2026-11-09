@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, corsHeaders, errorResponse, parseAllowedOrigins } from './http';
+import { corsHeaders, parseAllowedOrigins } from './http';
 import worker from './index';
 import type { Env } from './config';
 
@@ -13,23 +13,6 @@ const env: Env = {
 function call(request: Request): Promise<Response> {
   return worker.fetch(request, env);
 }
-
-describe('errorResponse', () => {
-  it('dołącza szczegóły techniczne, jeśli są', async () => {
-    const response = errorResponse(
-      new ApiError(504, 'llm_timeout', 'Za długo', 'Workers AI: przekroczony czas'),
-      new Headers(),
-    );
-    expect(await response.json()).toEqual({
-      error: { code: 'llm_timeout', message: 'Za długo', details: 'Workers AI: przekroczony czas' },
-    });
-  });
-
-  it('pomija pole details, gdy go nie ma', async () => {
-    const response = errorResponse(new ApiError(400, 'bad', 'Źle'), new Headers());
-    expect(await response.json()).toEqual({ error: { code: 'bad', message: 'Źle' } });
-  });
-});
 
 describe('CORS', () => {
   it('parsuje listę originów i usuwa końcowy ukośnik', () => {

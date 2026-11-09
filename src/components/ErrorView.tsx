@@ -2,14 +2,12 @@ import { useEffect, useRef } from 'react';
 
 interface ErrorViewProps {
   message: string;
-  /** Szczegóły techniczne — zwinięte, dla osoby diagnozującej problem. */
-  details?: string | undefined;
   onRetry?: (() => void) | undefined;
   onReset: () => void;
 }
 
 /** Stan błędu z opcją ponowienia (F-06). */
-export function ErrorView({ message, details, onRetry, onReset }: ErrorViewProps) {
+export function ErrorView({ message, onRetry, onReset }: ErrorViewProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
@@ -25,16 +23,6 @@ export function ErrorView({ message, details, onRetry, onReset }: ErrorViewProps
         Nie udało się przeanalizować dokumentu
       </h2>
       <p className="error__message">{message}</p>
-      {details && (
-        <details className="error__details">
-          <summary>Szczegóły techniczne</summary>
-          <ul>
-            {details.split('; ').map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </details>
-      )}
       <div className="actions">
         {onRetry && (
           <button type="button" className="button button--primary" onClick={onRetry}>

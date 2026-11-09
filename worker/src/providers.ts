@@ -227,55 +227,36 @@ export async function completeWithFallback(
 
   const tokens = estimateTokens(messages);
   const failures: ProviderFailure[] = [];
-  // Diagnostyka: co zawiodło u którego dostawcy (i po jakim czasie) — trafia do komunikatu błędu.
-  const details: string[] = [];
 
   for (let index = startIndex; index < providers.length; index++) {
     const provider = providers[index];
     if (provider === undefined) continue;
-    const label = `${provider.name} (${provider.model.split('/').pop() ?? provider.model})`;
     if (provider.maxInputTokens !== null && tokens > provider.maxInputTokens) {
       failures.push('too_large');
-      details.push(`${label}: pominięty — dokument za duży dla limitu tokenów`);
       continue;
     }
-    const started = Date.now();
     try {
       return { text: await provider.complete(messages), provider, index };
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
       failures.push(error.failure);
-      const seconds = ((Date.now() - started) / 1000).toFixed(1).replace('.', ',');
-      details.push(`${label}: ${error.message} (po ${seconds} s)`);
     }
   }
 
-  const summary = details.join('; ');
   if (failures.includes('rate_limit')) {
     throw new ApiError(
       429,
       'llm_rate_limited',
       'Dzienny limit darmowych usług AI został chwilowo wyczerpany. Spróbuj ponownie później.',
-      summary,
     );
   }
   if (failures.every((failure) => failure === 'too_large')) {
-    throw new ApiError(
-      413,
-      'llm_too_large',
-      'Dokument jest zbyt długi dla dostępnych modeli AI.',
-      summary,
-    );
+    throw new ApiError(413, 'llm_too_large', 'Dokument jest zbyt długi dla dostępnych modeli AI.');
   }
   if (failures.includes('timeout')) {
-    throw new ApiError(
-      504,
-      'llm_timeout',
-      'Model AI nie odpowiedział na czas. Spróbuj ponownie.',
-      summary,
-    );
+    throw new ApiError(504, 'llm_timeout', 'Model AI nie odpowiedział na czas. Spróbuj ponownie.');
   }
-  throw new ApiError(502, 'llm_unavailable', 'Usługa AI jest chwilowo niedostępna.', summary);
+  throw new ApiError(502, 'llm_unavailable', 'Usługa AI jest chwilowo niedostępna.');
 }
 
 /**
