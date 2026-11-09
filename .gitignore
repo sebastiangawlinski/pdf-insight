@@ -23,3 +23,6 @@ worker/.dev.vars
 !.vscode/extensions.json
 .idea
 .DS_Store
+
+# Visual Studio
+.vs/
