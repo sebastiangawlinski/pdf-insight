@@ -1,4 +1,9 @@
-import { DOCUMENT_TYPES, isoDateSchema, type DocumentType } from '../../src/lib/schema';
+import {
+  DOCUMENT_TYPES,
+  isIsoCurrency,
+  isoDateSchema,
+  type DocumentType,
+} from '../../src/lib/schema';
 
 /**
  * Normalizacja surowej odpowiedzi modelu PRZED walidacją Zod.
@@ -57,7 +62,8 @@ export function normalizeCurrency(value: unknown): string | null {
   if (text === null) return null;
   const upper = text.toUpperCase().replace(/\.$/, '');
   const mapped = CURRENCY_ALIASES[upper] ?? upper;
-  return /^[A-Z]{3}$/.test(mapped) ? mapped : null;
+  // nieznany lub wymyślony kod waluty → null (model nie zgaduje)
+  return isIsoCurrency(mapped) ? mapped : null;
 }
 
 /** Zamienia "12 500,50" / "12,500.50" / "12500.5 zł" na liczbę. */

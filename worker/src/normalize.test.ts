@@ -32,6 +32,7 @@ describe('normalizeCurrency', () => {
 
   it('zwraca null dla nieznanych lub pustych wartości', () => {
     expect(normalizeCurrency('złotych polskich')).toBeNull();
+    expect(normalizeCurrency('XYZ')).toBeNull();
     expect(normalizeCurrency('')).toBeNull();
     expect(normalizeCurrency(undefined)).toBeNull();
   });

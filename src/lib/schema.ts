@@ -21,8 +21,25 @@ export const isoDateSchema = z
 /** Kod języka ISO 639-1, np. "pl", "en". */
 const languageSchema = z.string().regex(/^[a-z]{2}$/, 'Język musi być kodem ISO 639-1');
 
+/**
+ * Lista kodów walut ISO 4217 wbudowana w silnik JavaScript (przeglądarka, Worker, Node).
+ * Jeśli środowisko jej nie udostępnia, sprawdzamy sam format (trzy wielkie litery).
+ */
+const ISO_CURRENCIES: ReadonlySet<string> | null = (() => {
+  try {
+    return new Set(Intl.supportedValuesOf('currency'));
+  } catch {
+    return null;
+  }
+})();
+
+/** Czy kod jest prawdziwym kodem waluty ISO 4217, np. "PLN", "EUR" (a nie wymyślonym "XYZ"). */
+export function isIsoCurrency(code: string): boolean {
+  return /^[A-Z]{3}$/.test(code) && (ISO_CURRENCIES === null || ISO_CURRENCIES.has(code));
+}
+
 /** Kod waluty ISO 4217, np. "PLN", "EUR". */
-const currencySchema = z.string().regex(/^[A-Z]{3}$/, 'Waluta musi być kodem ISO 4217');
+const currencySchema = z.string().refine(isIsoCurrency, 'Waluta musi być kodem ISO 4217');
 
 const nonEmptyText = z.string().trim().min(1);
 

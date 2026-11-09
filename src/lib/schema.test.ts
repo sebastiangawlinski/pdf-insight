@@ -80,6 +80,18 @@ describe('analysisSchema', () => {
     expect(analysisSchema.safeParse(data).success).toBe(false);
   });
 
+  it('odrzuca wymyślony kod waluty spoza ISO 4217', () => {
+    const data = validAnalysis();
+    data.amounts = [{ value: 100, currency: 'XYZ', context: 'opłata' }];
+    expect(analysisSchema.safeParse(data).success).toBe(false);
+  });
+
+  it.each(['PLN', 'EUR', 'USD', 'GBP', 'CHF'])('akceptuje kod waluty %s', (currency) => {
+    const data = validAnalysis();
+    data.amounts = [{ value: 100, currency, context: 'opłata' }];
+    expect(analysisSchema.safeParse(data).success).toBe(true);
+  });
+
   it('wymaga kwoty jako liczby', () => {
     const data = validAnalysis();
     data.amounts = [{ value: '12 500' as unknown as number, currency: 'PLN', context: 'x' }];
