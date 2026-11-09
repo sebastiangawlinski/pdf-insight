@@ -24,6 +24,30 @@ export class PdfReadError extends Error {
 export interface ExtractedPdf {
   text: string;
   pages: number;
+  /** Ile fragmentów niewidocznego tekstu pominięto (ochrona przed ukrytymi poleceniami dla AI). */
+  hiddenFragments: number;
+}
+
+/**
+ * Tekst mniejszy niż 5,5 pt jest praktycznie nieczytelny dla człowieka, a bywa używany do ukrywania
+ * poleceń dla AI (np. biała czcionka 5 pt na białym tle). Zwykły tekst dokumentów ma 7–12 pt,
+ * przypisy 6–8 pt.
+ */
+export const MIN_VISIBLE_FONT_SIZE_PT = 5.5;
+
+/**
+ * Czy fragment tekstu jest niewidoczny dla czytelnika: za mała czcionka albo położenie poza stroną.
+ * `transform` to macierz [a, b, c, d, x, y] z pdf.js (współrzędne strony, 1 pt = 1 jednostka).
+ */
+export function isHiddenTextItem(
+  transform: readonly number[],
+  pageWidth: number,
+  pageHeight: number,
+): boolean {
+  const [, , c = 0, d = 0, x = 0, y = 0] = transform;
+  const fontSize = Math.hypot(c, d);
+  if (fontSize < MIN_VISIBLE_FONT_SIZE_PT) return true;
+  return x < -fontSize || y < -fontSize || x > pageWidth || y > pageHeight + fontSize;
 }
 
 /** Poniżej tej liczby znaków uznajemy, że PDF nie ma warstwy tekstowej (np. skan). */
@@ -43,13 +67,23 @@ export async function extractPdfText(file: File): Promise<ExtractedPdf> {
   try {
     const pdf = await loadingTask.promise;
     const pageTexts: string[] = [];
+    let hiddenFragments = 0;
 
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
+      const { width, height } = page.getViewport({ scale: 1 });
       const content = await page.getTextContent();
       let pageText = '';
+      let inHiddenRun = false;
       for (const item of content.items) {
         if (!('str' in item)) continue;
+        if (item.str.trim() !== '' && isHiddenTextItem(item.transform, width, height)) {
+          // ciąg sąsiednich ukrytych elementów liczymy jako jeden fragment
+          if (!inHiddenRun) hiddenFragments++;
+          inHiddenRun = true;
+          continue;
+        }
+        if (item.str.trim() !== '') inHiddenRun = false;
         pageText += item.str + (item.hasEOL ? '\n' : '');
       }
       pageTexts.push(pageText.replace(/[ \t]+/g, ' ').trim());
@@ -68,7 +102,7 @@ export async function extractPdfText(file: File): Promise<ExtractedPdf> {
       );
     }
 
-    return { text, pages: pdf.numPages };
+    return { text, pages: pdf.numPages, hiddenFragments };
   } catch (error) {
     if (error instanceof PdfReadError) throw error;
     if (error instanceof pdfjs.PasswordException) {
