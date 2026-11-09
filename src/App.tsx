@@ -108,8 +108,10 @@ export default function App() {
             <FileDropzone onFileSelected={handleFile} />
             <p className="privacy">
               <strong>Prywatność:</strong> tekst wyciągnięty z pliku zostanie wysłany do
-              zewnętrznego modelu AI (Groq) w celu analizy. Sam plik PDF nie opuszcza Twojej
-              przeglądarki. Nie wgrywaj dokumentów zawierających dane poufne.
+              zewnętrznego modelu AI (Cloudflare Workers AI, awaryjnie Groq) w celu analizy. Sam
+              plik PDF nie opuszcza Twojej przeglądarki. Wynik analizy jest przechowywany na
+              serwerze przez 7 dni, żeby ponowna analiza tego samego dokumentu była natychmiastowa.
+              Nie wgrywaj dokumentów zawierających dane poufne.
             </p>
             <HistoryList
               entries={history}

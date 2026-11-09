@@ -202,6 +202,9 @@ export function ResultView({ analysis, fromHistory, onReset }: ResultViewProps) 
       <p className="muted small result__footnote">
         Wynik wygenerowany przez AI ({analysis.meta.model}
         {analysis.meta.chunks > 1 ? `, dokument podzielony na ${analysis.meta.chunks} części` : ''}
+        {analysis.meta.cached
+          ? `; z pamięci podręcznej — analiza z ${formatDateTime(analysis.meta.analyzedAt)}`
+          : ''}
         ). Sprawdź ważne informacje w oryginalnym dokumencie.
       </p>
     </article>
