@@ -21,6 +21,7 @@ export interface AnalyzeRequest {
   fileName: string;
   pages: number;
   text: string;
+  hiddenFragments: number;
 }
 
 /**

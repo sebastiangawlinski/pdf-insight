@@ -34,11 +34,16 @@ export default function App() {
 
     try {
       setState({ status: 'reading', file });
-      const { text, pages } = await extractPdfText(file);
+      const { text, pages, hiddenFragments } = await extractPdfText(file);
       if (!isCurrent()) return;
 
       setState({ status: 'analyzing', file });
-      const analysis = await analyzeDocument({ fileName: file.name, pages, text });
+      const analysis = await analyzeDocument({
+        fileName: file.name,
+        pages,
+        text,
+        hiddenFragments,
+      });
       if (!isCurrent()) return;
 
       setHistory(addToHistory(analysis));

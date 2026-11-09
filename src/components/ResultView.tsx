@@ -10,6 +10,7 @@ import {
 } from '../lib/format';
 import type { Analysis } from '../lib/schema';
 import { JsonPreview } from './JsonPreview';
+import { SecurityNotice } from './SecurityNotice';
 
 interface ResultViewProps {
   analysis: Analysis;
@@ -78,6 +79,8 @@ export function ResultView({ analysis, fromHistory, onReset }: ResultViewProps) 
           </button>
         </div>
       </header>
+
+      <SecurityNotice report={analysis.meta.security} />
 
       {analysis.meta.truncated && (
         <p className="notice" role="note">

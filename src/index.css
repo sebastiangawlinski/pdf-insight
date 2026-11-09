@@ -531,6 +531,57 @@ a {
   margin-top: 0.5rem;
 }
 
+/* ===== Security notice ===== */
+.security {
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  border: 1px solid #f2c4bd;
+  border-left: 4px solid var(--danger);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.security__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  color: var(--danger);
+}
+
+.security__icon {
+  font-size: 1.1rem;
+}
+
+.security__list,
+.security__excerpts {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.security__note {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.security__details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.security__excerpts {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
 /* ===== Result ===== */
 .result {
   display: flex;
