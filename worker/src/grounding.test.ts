@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AiAnalysis } from '../../src/lib/schema';
-import { findDatesInText, findNumbersInText, groundInSource } from './grounding';
+import { ANY_CURRENCY, findDatesInText, findMoneyInText, groundInSource } from './grounding';
 
 describe('findDatesInText', () => {
   it('rozpoznaje popularne zapisy dat (PL i EN)', () => {
@@ -21,15 +21,28 @@ describe('findDatesInText', () => {
   });
 });
 
-describe('findNumbersInText', () => {
-  it('rozpoznaje kwoty z separatorami i mnożnikami', () => {
-    const numbers = findNumbersInText(
-      'kwota 184 500,00 zł, abonament 12 300,00 PLN, 2 150 EUR, wzrost o 4,2 mln zł',
+describe('findMoneyInText', () => {
+  it('rozpoznaje kwoty z walutą, separatorami i mnożnikami', () => {
+    const money = findMoneyInText(
+      'kwota 184 500,00 zł, abonament 12\u00a0300,00 PLN, 2 150 EUR rocznie, hosting 890 USD, ' +
+        'wzrost o 4,2 mln zł, rekompensata € 40, kwota (295\n200,00 zł)',
     );
-    expect(numbers.has(184500)).toBe(true);
-    expect(numbers.has(12300)).toBe(true);
-    expect(numbers.has(2150)).toBe(true);
-    expect(numbers.has(4200000)).toBe(true);
+    expect(money.get(184500)).toEqual(new Set(['PLN']));
+    expect(money.get(12300)).toEqual(new Set(['PLN']));
+    expect(money.get(2150)).toEqual(new Set(['EUR']));
+    expect(money.get(890)).toEqual(new Set(['USD']));
+    expect(money.get(4200000)).toEqual(new Set(['PLN']));
+    expect(money.get(40)).toEqual(new Set(['EUR']));
+    expect(money.get(295200)).toEqual(new Set(['PLN']));
+  });
+
+  it('traktuje format z groszami jako kwotę nawet bez waluty (tabele)', () => {
+    expect(findMoneyInText('E1 Analiza 27 675,00').get(27675)).toEqual(new Set([ANY_CURRENCY]));
+  });
+
+  it('NIE traktuje zwykłych liczb jako kwot', () => {
+    const money = findMoneyInText('Strona 1 z 12. § 1 ust. 3. Rok 2026. 120 użytkowników.');
+    expect(money.size).toBe(0);
   });
 });
 
@@ -49,6 +62,23 @@ describe('groundInSource', () => {
     ],
     keywords: [],
   };
+
+  it('odrzuca kwotę, która występuje w tekście tylko jako zwykła liczba (np. numer strony)', () => {
+    const withOne: AiAnalysis = {
+      ...base,
+      amounts: [{ value: 1, currency: 'PLN', context: 'wartość umowy' }],
+    };
+    const grounded = groundInSource(withOne, 'Strona 1 z 12. § 1. Wynagrodzenie 184 500,00 zł.');
+    expect(grounded.amounts).toEqual([]);
+  });
+
+  it('odrzuca kwotę z niezgodną walutą', () => {
+    const wrong: AiAnalysis = {
+      ...base,
+      amounts: [{ value: 184500, currency: 'EUR', context: 'wynagrodzenie' }],
+    };
+    expect(groundInSource(wrong, 'Wynagrodzenie 184 500,00 zł.').amounts).toEqual([]);
+  });
 
   it('usuwa kwoty i daty, których nie ma w dokumencie', () => {
     const source = 'Umowa z dnia 12.03.2026. Od 1 kwietnia 2026 r. Wynagrodzenie 184 500,00 zł.';

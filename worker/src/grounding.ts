@@ -64,21 +64,67 @@ export function findDatesInText(text: string): Set<string> {
   return found;
 }
 
-/** Wszystkie liczby z tekstu (z uwzględnieniem „tys.” i „mln”), zaokrąglone do groszy. */
-export function findNumbersInText(text: string): Set<number> {
-  const found = new Set<number>();
+/** Waluta (kod ISO 4217) dla symboli i skrótów spotykanych w dokumentach. */
+const CURRENCY_TOKENS: [RegExp, string][] = [
+  [/^(zł|zl|pln|złotych|złote|złoty)$/i, 'PLN'],
+  [/^(eur|euro|€)$/i, 'EUR'],
+  [/^(usd|\$|us\$)$/i, 'USD'],
+  [/^(gbp|£)$/i, 'GBP'],
+  [/^chf$/i, 'CHF'],
+];
+
+function currencyOf(token: string | undefined): string | null {
+  if (token === undefined) return null;
+  for (const [pattern, code] of CURRENCY_TOKENS) if (pattern.test(token)) return code;
+  return /^[A-Z]{3}$/.test(token) ? token : null;
+}
+
+/** Specjalna wartość: kwota w formacie pieniężnym (z groszami), ale bez waluty obok — np. w tabeli. */
+export const ANY_CURRENCY = '*';
+
+/**
+ * Kwoty pieniężne zapisane w tekście: wartość (zaokrąglona do groszy) → zbiór walut.
+ * Liczba jest kwotą, jeśli stoi obok waluty („184 500,00 zł”, „€ 40”, „4,2 mln zł”)
+ * albo ma format pieniężny z dwoma miejscami po przecinku („27 675,00” w tabeli).
+ * Same liczby („Strona 1 z 12”, „§ 1”, „2026”) NIE są kwotami — dzięki temu model nie może
+ * „uziemić” zmyślonej kwoty w przypadkowej liczbie z dokumentu.
+ */
+export function findMoneyInText(text: string): Map<number, Set<string>> {
+  const found = new Map<number, Set<string>>();
+  const add = (value: number, currency: string) => {
+    const key = round(value);
+    const set = found.get(key) ?? new Set<string>();
+    set.add(currency);
+    found.set(key, set);
+  };
+
   // liczba z ewentualnymi separatorami tysięcy (spacja, twarda spacja, złamanie wiersza, kropka,
   // przecinek) — \s obejmuje też twardą spację U+00A0
   const pattern = /\d{1,3}(?:[\s.,]\d{3}(?!\d))+(?:[.,]\d+)?|\d+(?:[.,]\d+)?/g;
   for (const m of text.matchAll(pattern)) {
-    const value = parseAmount(m[0]);
-    if (value === null) continue;
-    found.add(round(value));
+    const base = parseAmount(m[0]);
+    if (base === null) continue;
     const end = m.index + m[0].length;
-    const after = text.slice(end, end + 8);
-    if (/^\s*(mln|million|mio)/i.test(after)) found.add(round(value * 1_000_000));
-    if (/^\s*(tys|k\b|thousand)/i.test(after)) found.add(round(value * 1_000));
-    if (/^\s*(mld|billion)/i.test(after)) found.add(round(value * 1_000_000_000));
+    const after =
+      /^\s{0,2}(mln|mld|tys\.?|million|billion|thousand|k)?\s{0,2}([\p{L}$€£]{1,8})/iu.exec(
+        text.slice(end, end + 24),
+      );
+    const before = /([A-Z]{3}|[$€£])\s{0,2}$/u.exec(text.slice(Math.max(0, m.index - 6), m.index));
+
+    let value = base;
+    const multiplier = after?.[1]?.toLowerCase();
+    if (multiplier === 'mln' || multiplier === 'million') value = base * 1_000_000;
+    if (multiplier === 'mld' || multiplier === 'billion') value = base * 1_000_000_000;
+    if (multiplier?.startsWith('tys') === true || multiplier === 'thousand' || multiplier === 'k') {
+      value = base * 1_000;
+    }
+
+    const currency = currencyOf(after?.[2]) ?? currencyOf(before?.[1]);
+    if (currency !== null) {
+      add(value, currency);
+    } else if (/[.,]\d{2}$/.test(m[0])) {
+      add(base, ANY_CURRENCY);
+    }
   }
   return found;
 }
@@ -87,8 +133,19 @@ function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function isGroundedAmount(
+  money: Map<number, Set<string>>,
+  value: number,
+  currency: string | null,
+): boolean {
+  const currencies = money.get(round(value));
+  if (currencies === undefined) return false;
+  if (currency === null || currencies.has(ANY_CURRENCY)) return true;
+  return currencies.has(currency);
+}
+
 export function groundInSource(result: AiAnalysis, sourceText: string): AiAnalysis {
-  const numbers = findNumbersInText(sourceText);
+  const money = findMoneyInText(sourceText);
   const dates = findDatesInText(sourceText);
   const documentDate = result.document.date;
 
@@ -98,7 +155,9 @@ export function groundInSource(result: AiAnalysis, sourceText: string): AiAnalys
       ...result.document,
       date: documentDate !== null && dates.has(documentDate) ? documentDate : null,
     },
-    amounts: result.amounts.filter((amount) => numbers.has(round(amount.value))),
+    amounts: result.amounts.filter((amount) =>
+      isGroundedAmount(money, amount.value, amount.currency),
+    ),
     dates: result.dates.filter((entry) => dates.has(entry.date)),
   };
 }
