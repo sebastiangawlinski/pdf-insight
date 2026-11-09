@@ -30,6 +30,8 @@ ACCURACY RULES:
 - Dates: ISO 8601 "YYYY-MM-DD". Only include dates with a known day, month and year.
 - Currencies: ISO 4217 codes (e.g. "zł" -> "PLN", "€" -> "EUR", "$" -> "USD"). Use null if the currency is not stated.
 - "amounts" contains only monetary amounts (no percentages, counts or durations). Each amount must appear in the document.
+- Be CONCISE: every "context" has at most 8 words, every key point at most 15 words.
+- List at most 12 amounts and at most 10 dates — the most important ones.
 - Amount "value" is a plain JSON number (e.g. 12500.5), without thousand separators or currency symbols.
 
 OUTPUT FORMAT — exactly this structure, no extra text, no markdown:

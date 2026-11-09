@@ -35,8 +35,8 @@ export const LIMITS = {
   chunkChars: 16_000,
   /** Limit czasu jednego wywołania LLM. */
   llmTimeoutMs: 25_000,
-  /** Maksymalna liczba tokenów odpowiedzi modelu. */
-  maxOutputTokens: 2_500,
+  /** Maksymalna liczba tokenów odpowiedzi modelu (krótsza odpowiedź = szybsza analiza). */
+  maxOutputTokens: 1_500,
   /**
    * Groq (darmowy plan) ma limit 8 tys. tokenów na minutę, liczony z wejściem i wyjściem.
    * Większych zapytań w ogóle tam nie wysyłamy — od razu przechodzimy dalej.
