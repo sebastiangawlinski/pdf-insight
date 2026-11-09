@@ -53,4 +53,4 @@ export const DEFAULT_WORKERS_AI_MODEL = '@cf/google/gemma-4-26b-a4b-it';
  * Wersja promptu i reguł analizy. Wchodzi do klucza pamięci podręcznej — zmiana promptu
  * unieważnia stare wyniki.
  */
-export const ANALYSIS_VERSION = 'v2';
+export const ANALYSIS_VERSION = 'v3';
