@@ -6,7 +6,7 @@ import type { Env } from './config';
 const env: Env = {
   LLM_API_KEY: 'k',
   LLM_BASE_URL: 'https://llm.example/v1',
-  LLM_MODEL: 'm',
+  LLM_MODELS: 'm',
   ALLOWED_ORIGINS: 'https://sebastiangawlinski.github.io/',
 };
 

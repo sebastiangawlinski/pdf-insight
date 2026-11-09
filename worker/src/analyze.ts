@@ -8,10 +8,17 @@ import {
   type SecurityReport,
 } from '../../src/lib/schema';
 import { mergePartialResults, splitIntoChunks, truncateText } from './chunking';
+import { cacheKey, readCache, writeCache } from './cache';
 import { LIMITS, type Env } from './config';
 import { groundInSource } from './grounding';
 import { ApiError } from './http';
-import { callLlm, parseJsonObject } from './llm';
+import {
+  buildProviders,
+  completeWithFallback,
+  parseJsonObject,
+  type ChatMessage,
+  type Provider,
+} from './providers';
 import { normalizeAiResult, normalizeMergedSummary } from './normalize';
 import { removeInjectedInstructions } from './injection';
 import {
@@ -51,35 +58,46 @@ export function buildSecurityReport(hiddenFragments: number, removed: string[]):
 
 const mergedSummarySchema = aiAnalysisSchema.pick({ summary: true, keyPoints: true });
 
+/** Kontekst jednej analizy: łańcuch dostawców i lista faktycznie użytych modeli. */
+interface AnalysisContext {
+  providers: Provider[];
+  used: Set<string>;
+}
+
 /**
- * Wysyła zapytanie do modelu i waliduje odpowiedź.
- * Zgodnie z briefem: przy błędnej odpowiedzi jest JEDNA ponowna próba — model dostaje
- * swoją poprzednią odpowiedź i listę błędów walidacji. Potem zwracamy błąd.
+ * Wysyła zapytanie do modelu (z łańcuchem awaryjnym dostawców) i waliduje odpowiedź.
+ * Zgodnie z briefem: przy błędnej odpowiedzi jest JEDNA ponowna próba — u tego samego dostawcy,
+ * który odpowiedział; model dostaje swoją poprzednią odpowiedź i listę błędów walidacji.
+ * Potem zwracamy błąd.
  */
 async function requestValidated<T>(
-  env: Env,
+  ctx: AnalysisContext,
   systemPrompt: string,
   userMessage: string,
   schema: z.ZodType<T>,
   normalize: (raw: unknown) => unknown,
 ): Promise<T> {
-  const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+  const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userMessage },
   ];
 
+  let startIndex = 0;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const raw = await callLlm(env, messages);
+    const completion = await completeWithFallback(ctx.providers, messages, startIndex);
+    startIndex = completion.index;
+    ctx.used.add(`${completion.provider.name} / ${completion.provider.model}`);
+
     let problem: string;
     try {
-      const result = schema.safeParse(normalize(parseJsonObject(raw)));
+      const result = schema.safeParse(normalize(parseJsonObject(completion.text)));
       if (result.success) return result.data;
       problem = describeIssues(result.error);
     } catch {
       problem = 'The response was not valid JSON.';
     }
     messages.push(
-      { role: 'assistant', content: raw },
+      { role: 'assistant', content: completion.text },
       {
         role: 'user',
         content: `Your previous answer did not match the required format: ${problem}. Return the corrected JSON object only.`,
@@ -95,13 +113,13 @@ async function requestValidated<T>(
 }
 
 async function extract(
-  env: Env,
+  ctx: AnalysisContext,
   text: string,
   part?: { index: number; total: number },
 ): Promise<AiAnalysis> {
   const tag = createBoundaryTag('document');
   const result = await requestValidated(
-    env,
+    ctx,
     buildSystemPrompt(tag),
     buildUserMessage(text, tag, part),
     aiAnalysisSchema,
@@ -109,6 +127,36 @@ async function extract(
   );
   // Kwoty i daty, których nie ma w tekście źródłowym, są usuwane (anty-halucynacje, anty-injection).
   return groundInSource(result, text);
+}
+
+/** Właściwa analiza AI oczyszczonego tekstu (jedno zapytanie albo fragmenty + łączenie). */
+async function runAnalysis(
+  ctx: AnalysisContext,
+  text: string,
+): Promise<{ ai: AiAnalysis; chunks: number }> {
+  if (text.length <= LIMITS.singlePassChars) {
+    return { ai: await extract(ctx, text), chunks: 1 };
+  }
+
+  // F-08: długi dokument → fragmenty analizowane równolegle, potem łączenie.
+  const chunks = splitIntoChunks(text, LIMITS.chunkChars);
+  const partials = await Promise.all(
+    chunks.map((chunk, i) => extract(ctx, chunk, { index: i + 1, total: chunks.length })),
+  );
+  const merged = mergePartialResults(partials);
+  const mergeTag = createBoundaryTag('partials');
+  const summary = await requestValidated(
+    ctx,
+    buildMergeSystemPrompt(mergeTag),
+    buildMergeMessage(
+      mergeTag,
+      merged.document.language,
+      partials.map(({ summary: s, keyPoints }) => ({ summary: s, keyPoints })),
+    ),
+    mergedSummarySchema,
+    normalizeMergedSummary,
+  );
+  return { ai: { ...merged, ...summary }, chunks: chunks.length };
 }
 
 export async function analyzeDocument(env: Env, input: AnalyzeInput): Promise<Analysis> {
@@ -127,34 +175,27 @@ export async function analyzeDocument(env: Env, input: AnalyzeInput): Promise<An
 
   const { text, truncated } = truncateText(scan.text, LIMITS.maxAnalyzedChars);
 
-  let ai: AiAnalysis;
-  let chunkCount = 1;
+  // Pamięć podręczna: ten sam tekst → gotowy wynik, bez zużywania limitów AI.
+  const key = await cacheKey(text);
+  let cached = await readCache(env.PDF_CACHE, key);
+  const fromCache = cached !== null;
 
-  if (text.length <= LIMITS.singlePassChars) {
-    ai = await extract(env, text);
-  } else {
-    // F-08: długi dokument → fragmenty analizowane równolegle, potem łączenie.
-    const chunks = splitIntoChunks(text, LIMITS.chunkChars);
-    chunkCount = chunks.length;
-    const partials = await Promise.all(
-      chunks.map((chunk, i) => extract(env, chunk, { index: i + 1, total: chunks.length })),
-    );
-    const merged = mergePartialResults(partials);
-    const mergeTag = createBoundaryTag('partials');
-    const summary = await requestValidated(
-      env,
-      buildMergeSystemPrompt(mergeTag),
-      buildMergeMessage(
-        mergeTag,
-        merged.document.language,
-        partials.map(({ summary: s, keyPoints }) => ({ summary: s, keyPoints })),
-      ),
-      mergedSummarySchema,
-      normalizeMergedSummary,
-    );
-    ai = { ...merged, ...summary };
+  if (cached === null) {
+    const ctx: AnalysisContext = { providers: buildProviders(env), used: new Set() };
+    const { ai, chunks } = await runAnalysis(ctx, text);
+    const usedModels = [...ctx.used];
+    cached = {
+      ai,
+      chunks,
+      truncated,
+      model: usedModels.join(', '),
+      provider: [...new Set(usedModels.map((m) => m.split(' / ')[0] ?? m))].join(', '),
+      analyzedAt: new Date().toISOString(),
+    };
+    await writeCache(env.PDF_CACHE, key, cached);
   }
 
+  const { ai } = cached;
   const analysis: Analysis = {
     document: { ...ai.document, fileName: input.fileName, pages: input.pages },
     summary: ai.summary,
@@ -164,10 +205,12 @@ export async function analyzeDocument(env: Env, input: AnalyzeInput): Promise<An
     dates: ai.dates,
     keywords: ai.keywords,
     meta: {
-      model: env.LLM_MODEL,
-      analyzedAt: new Date().toISOString(),
-      chunks: chunkCount,
-      truncated,
+      model: cached.model,
+      provider: cached.provider,
+      analyzedAt: cached.analyzedAt,
+      cached: fromCache,
+      chunks: cached.chunks,
+      truncated: cached.truncated,
       security,
     },
   };

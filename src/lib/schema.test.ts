@@ -20,7 +20,9 @@ function validAnalysis() {
     keywords: ['serwis', 'SLA'],
     meta: {
       model: 'test-model',
+      provider: 'Test',
       analyzedAt: '2026-11-09T14:00:00.000Z',
+      cached: false,
       chunks: 1,
       truncated: false,
       security: {

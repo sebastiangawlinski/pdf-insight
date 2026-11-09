@@ -5,11 +5,18 @@
   "compatibility_date": "2026-11-01",
   "observability": { "enabled": true },
 
-  // Jawne (nie-sekretne) ustawienia. Klucz API ustawiasz osobno:
+  // Główny dostawca AI: Cloudflare Workers AI — połączenie przez binding, bez klucza API.
+  "ai": { "binding": "AI" },
+
+  // Pamięć podręczna wyników analiz (wpisy wygasają po 7 dniach).
+  "kv_namespaces": [{ "binding": "PDF_CACHE", "id": "b6a9a18b57624db586b34469a3f1a37a" }],
+
+  // Jawne (nie-sekretne) ustawienia. Klucz dostawcy zapasowego (Groq) ustawiasz osobno:
   //   npx wrangler secret put LLM_API_KEY --config worker/wrangler.jsonc
   "vars": {
+    "WORKERS_AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "LLM_BASE_URL": "https://api.groq.com/openai/v1",
-    "LLM_MODEL": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "LLM_MODELS": "openai/gpt-oss-120b,openai/gpt-oss-20b",
     "ALLOWED_ORIGINS": "https://sebastiangawlinski.github.io",
   },
 

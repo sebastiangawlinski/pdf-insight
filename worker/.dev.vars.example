@@ -1,4 +1,6 @@
 # Sekrety Workera do lokalnego developmentu (`npm run worker:dev`).
+# Główny dostawca (Workers AI) nie potrzebuje klucza — wystarczy `npx wrangler login`.
+# Poniżej klucz dostawcy zapasowego (Groq).
 # Skopiuj ten plik jako worker/.dev.vars i wpisz własny klucz. Plik .dev.vars jest w .gitignore.
 # Na produkcji klucz ustawiasz poleceniem: npx wrangler secret put LLM_API_KEY --config worker/wrangler.jsonc
 LLM_API_KEY=gsk_twoj_klucz_groq

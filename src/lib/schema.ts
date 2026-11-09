@@ -78,8 +78,13 @@ export type SecurityReport = z.infer<typeof securityReportSchema>;
 
 /** Dodatkowe informacje techniczne (brief pozwala dodawać pola). */
 export const analysisMetaSchema = z.object({
+  /** Faktycznie użyte modele, np. "Workers AI / @cf/meta/llama-3.3-70b-instruct-fp8-fast". */
   model: z.string(),
+  /** Dostawca (lub dostawcy) AI, który wykonał analizę. */
+  provider: z.string(),
   analyzedAt: z.iso.datetime(),
+  /** Czy wynik pochodzi z pamięci podręcznej (ten sam dokument analizowany wcześniej). */
+  cached: z.boolean(),
   chunks: z.number().int().positive(),
   truncated: z.boolean(),
   security: securityReportSchema,

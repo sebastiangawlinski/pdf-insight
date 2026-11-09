@@ -26,7 +26,9 @@ function analysis(fileName: string, analyzedAt: string): Analysis {
     keywords: [],
     meta: {
       model: 'm',
+      provider: 'p',
       analyzedAt,
+      cached: false,
       chunks: 1,
       truncated: false,
       security: {

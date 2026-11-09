@@ -1,15 +1,23 @@
-/** Zmienne środowiskowe Workera (wrangler.jsonc → "vars", sekrety → `wrangler secret put`). */
+/** Zmienne środowiskowe i bindingi Workera (wrangler.jsonc, sekrety → `wrangler secret put`). */
 export interface Env {
-  /** Sekret: klucz API dostawcy LLM. Nigdy nie trafia do frontendu ani do repozytorium. */
-  LLM_API_KEY: string;
-  /** Bazowy URL API zgodnego z OpenAI Chat Completions, np. https://api.groq.com/openai/v1 */
-  LLM_BASE_URL: string;
-  /** Identyfikator modelu u dostawcy. */
-  LLM_MODEL: string;
+  /** Binding Cloudflare Workers AI — główny dostawca, bez klucza API. */
+  AI?: Ai;
+  /** Model w Workers AI, np. "@cf/meta/llama-3.3-70b-instruct-fp8-fast". */
+  WORKERS_AI_MODEL?: string;
+
+  /** Sekret: klucz API dostawcy zapasowego (Groq). Nigdy nie trafia do frontendu ani do repozytorium. */
+  LLM_API_KEY?: string;
+  /** Bazowy URL API zgodnego z OpenAI Chat Completions dostawcy zapasowego. */
+  LLM_BASE_URL?: string;
+  /** Modele dostawcy zapasowego w kolejności użycia, rozdzielone przecinkami. */
+  LLM_MODELS?: string;
+
   /** Lista dozwolonych originów (CORS), rozdzielona przecinkami. */
   ALLOWED_ORIGINS: string;
   /** Binding Cloudflare Rate Limiting — limit żądań na adres IP. */
   RATE_LIMITER?: RateLimit;
+  /** Binding Cloudflare KV — pamięć podręczna wyników analiz. */
+  PDF_CACHE?: KVNamespace;
 }
 
 export const LIMITS = {
@@ -29,4 +37,20 @@ export const LIMITS = {
   llmTimeoutMs: 25_000,
   /** Maksymalna liczba tokenów odpowiedzi modelu. */
   maxOutputTokens: 2_500,
+  /**
+   * Groq (darmowy plan) ma limit 8 tys. tokenów na minutę, liczony z wejściem i wyjściem.
+   * Większych zapytań w ogóle tam nie wysyłamy — od razu przechodzimy dalej.
+   */
+  groqMaxInputTokens: 4_500,
+  /** Jak długo trzymamy wynik w pamięci podręcznej (7 dni). */
+  cacheTtlSeconds: 7 * 24 * 60 * 60,
 } as const;
+
+/** Domyślny model Workers AI (jeśli nie ustawiono WORKERS_AI_MODEL). */
+export const DEFAULT_WORKERS_AI_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+
+/**
+ * Wersja promptu i reguł analizy. Wchodzi do klucza pamięci podręcznej — zmiana promptu
+ * unieważnia stare wyniki.
+ */
+export const ANALYSIS_VERSION = 'v2';

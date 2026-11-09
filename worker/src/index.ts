@@ -4,9 +4,10 @@ import { ApiError, corsHeaders, errorResponse, jsonResponse, parseAllowedOrigins
 import { readAnalyzeRequest } from './request';
 
 /**
- * PDF Insight API — proxy między frontendem (GitHub Pages) a modelem AI.
- * Trzyma klucz API po stronie serwera, ogranicza CORS do domeny demo
- * i limituje liczbę żądań na adres IP.
+ * PDF Insight API — proxy między frontendem (GitHub Pages) a modelami AI.
+ * Łączy się z Cloudflare Workers AI (binding, bez klucza) i awaryjnie z Groq (klucz w sekretach),
+ * ogranicza CORS do domeny demo, limituje liczbę żądań na adres IP
+ * i trzyma wyniki w pamięci podręcznej (KV).
  *
  *   GET  /health   → { ok: true }
  *   POST /analyze  → { fileName, pages, text } → wynik zgodny ze schematem

@@ -3,7 +3,7 @@ import { analysisSchema } from '../../src/lib/schema';
 import { analyzeDocument } from './analyze';
 import type { Env } from './config';
 import { ApiError } from './http';
-import { parseJsonObject } from './llm';
+import { parseJsonObject } from './providers';
 import {
   buildSystemPrompt,
   buildUserMessage,
@@ -14,7 +14,7 @@ import {
 const env: Env = {
   LLM_API_KEY: 'test-key',
   LLM_BASE_URL: 'https://llm.example/v1',
-  LLM_MODEL: 'test-model',
+  LLM_MODELS: 'test-model',
   ALLOWED_ORIGINS: 'https://example.github.io',
 };
 
@@ -57,7 +57,13 @@ describe('analyzeDocument', () => {
     expect(result.dates).toEqual(validModelOutput.dates);
     expect(result.document.fileName).toBe('faktura.pdf');
     expect(result.document.pages).toBe(2);
-    expect(result.meta).toMatchObject({ model: 'test-model', chunks: 1, truncated: false });
+    expect(result.meta).toMatchObject({
+      model: 'Groq / test-model',
+      provider: 'Groq',
+      cached: false,
+      chunks: 1,
+      truncated: false,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -123,23 +129,104 @@ describe('analyzeDocument', () => {
   });
 
   it('długi dokument dzieli na fragmenty i łączy wyniki (F-08)', async () => {
+    // Fragmenty są za duże dla Groq (limit 8 tys. tokenów/min), więc analizuje je Workers AI;
+    // małe zapytanie łączące podsumowania może trafić do dowolnego dostawcy.
+    const run = vi.fn(() => Promise.resolve({ response: JSON.stringify(validModelOutput) }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const longText = 'To jest zdanie testowe w długim dokumencie. '.repeat(1200); // ~54 tys. znaków
+
+    const result = await analyzeDocument(
+      { ...env, AI: { run } as unknown as Ai },
+      { fileName: 'raport.pdf', pages: 30, text: longText, hiddenFragments: 0 },
+    );
+
+    expect(result.meta.chunks).toBeGreaterThan(1);
+    // fragmenty + 1 wywołanie łączące podsumowania
+    expect(run).toHaveBeenCalledTimes(result.meta.chunks + 1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.meta.provider).toBe('Workers AI');
+    expect(analysisSchema.safeParse(result).success).toBe(true);
+  });
+
+  it('dokument za duży dla wszystkich dostawców — czytelny błąd', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    await expect(
+      analyzeDocument(env, {
+        fileName: 'a.pdf',
+        pages: 5,
+        text: 'Zdanie testowe w dokumencie. '.repeat(800),
+        hiddenFragments: 0,
+      }),
+    ).rejects.toMatchObject({ status: 413 });
+  });
+});
+
+function memoryKv(): KVNamespace {
+  const store = new Map<string, string>();
+  return {
+    get: (key: string) => Promise.resolve(store.get(key) ?? null),
+    put: (key: string, value: string) => {
+      store.set(key, value);
+      return Promise.resolve();
+    },
+  } as unknown as KVNamespace;
+}
+
+describe('łańcuch dostawców i pamięć podręczna', () => {
+  it('gdy Workers AI wyczerpie limit, analizę wykonuje Groq', async () => {
+    const ai = {
+      run: vi.fn(() => Promise.reject(new Error('3036: Account limited'))),
+    } as unknown as Ai;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(llmReply(JSON.stringify(validModelOutput))));
+
+    const result = await analyzeDocument(
+      { ...env, AI: ai },
+      { fileName: 'a.pdf', pages: 1, text: INVOICE_TEXT, hiddenFragments: 0 },
+    );
+
+    expect(result.meta.provider).toBe('Groq');
+  });
+
+  it('ten sam dokument drugi raz pochodzi z pamięci podręcznej (bez wywołania AI)', async () => {
+    const kv = memoryKv();
     const fetchMock = vi
       .fn()
       .mockImplementation(() => Promise.resolve(llmReply(JSON.stringify(validModelOutput))));
     vi.stubGlobal('fetch', fetchMock);
-    const longText = 'To jest zdanie testowe w długim dokumencie. '.repeat(1200); // ~54 tys. znaków
 
-    const result = await analyzeDocument(env, {
-      fileName: 'raport.pdf',
-      pages: 30,
-      text: longText,
-      hiddenFragments: 0,
-    });
+    const first = await analyzeDocument(
+      { ...env, PDF_CACHE: kv },
+      { fileName: 'a.pdf', pages: 1, text: INVOICE_TEXT, hiddenFragments: 0 },
+    );
+    const second = await analyzeDocument(
+      { ...env, PDF_CACHE: kv },
+      { fileName: 'kopia.pdf', pages: 1, text: INVOICE_TEXT, hiddenFragments: 0 },
+    );
 
-    expect(result.meta.chunks).toBeGreaterThan(1);
-    // fragmenty + 1 wywołanie łączące podsumowania
-    expect(fetchMock).toHaveBeenCalledTimes(result.meta.chunks + 1);
-    expect(analysisSchema.safeParse(result).success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(first.meta.cached).toBe(false);
+    expect(second.meta.cached).toBe(true);
+    expect(second.document.fileName).toBe('kopia.pdf');
+    expect(second.summary).toBe(first.summary);
+  });
+
+  it('uszkodzony wpis w pamięci podręcznej jest ignorowany', async () => {
+    const kv = memoryKv();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(llmReply(JSON.stringify(validModelOutput))));
+    vi.stubGlobal('fetch', fetchMock);
+    const { cacheKey } = await import('./cache');
+    await kv.put(await cacheKey(INVOICE_TEXT), '{"zepsute":true}');
+
+    const result = await analyzeDocument(
+      { ...env, PDF_CACHE: kv },
+      { fileName: 'a.pdf', pages: 1, text: INVOICE_TEXT, hiddenFragments: 0 },
+    );
+
+    expect(result.meta.cached).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
