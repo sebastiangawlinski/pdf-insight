@@ -1,3 +1,4 @@
+import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { hasPdfSignature } from './fileValidation';
 
@@ -29,24 +30,67 @@ export interface ExtractedPdf {
 }
 
 /**
- * Tekst mniejszy niż 5,5 pt jest praktycznie nieczytelny dla człowieka, a bywa używany do ukrywania
- * poleceń dla AI (np. biała czcionka 5 pt na białym tle). Zwykły tekst dokumentów ma 7–12 pt,
- * przypisy 6–8 pt.
+ * Wykrywanie tekstu ukrytego przed czytelnikiem (np. polecenie dla AI zapisane białą czcionką 5 pt).
+ *
+ * Próg jest WZGLĘDNY: tekst uznajemy za ukryty, gdy jest wyraźnie mniejszy niż dominująca czcionka
+ * dokumentu i jednocześnie mały w liczbach bezwzględnych. Dzięki temu dokument w całości pisany
+ * drobnym drukiem (np. arkusz Excela wydrukowany z „dopasuj do strony”, 4–5 pt) jest analizowany
+ * normalnie, a mikroskopijna wstawka w tekście 9–12 pt — pomijana.
  */
-export const MIN_VISIBLE_FONT_SIZE_PT = 5.5;
+export const HIDDEN_TEXT_RULES = {
+  /** Tekst musi być mniejszy niż ten ułamek dominującego rozmiaru... */
+  relativeFactor: 0.6,
+  /** ...i jednocześnie mniejszy niż tyle punktów (przypisy 6–8 pt zostają). */
+  absoluteMaxPt: 6,
+  /** Tekst poniżej tego rozmiaru jest nieczytelny zawsze, niezależnie od reszty dokumentu. */
+  alwaysHiddenBelowPt: 1.5,
+} as const;
+
+export function fontSizeOf(transform: readonly number[]): number {
+  const [, , c = 0, d = 0] = transform;
+  return Math.hypot(c, d);
+}
 
 /**
- * Czy fragment tekstu jest niewidoczny dla czytelnika: za mała czcionka albo położenie poza stroną.
- * `transform` to macierz [a, b, c, d, x, y] z pdf.js (współrzędne strony, 1 pt = 1 jednostka).
+ * Dominujący rozmiar czcionki dokumentu — rozmiar, którym zapisano najwięcej znaków
+ * (rozmiary zaokrąglone do 0,5 pt). Zwraca 0 dla pustej listy.
+ */
+export function dominantFontSize(samples: readonly { size: number; chars: number }[]): number {
+  const weights = new Map<number, number>();
+  for (const { size, chars } of samples) {
+    if (chars <= 0 || !Number.isFinite(size)) continue;
+    const bucket = Math.round(size * 2) / 2;
+    weights.set(bucket, (weights.get(bucket) ?? 0) + chars);
+  }
+  let best = 0;
+  let bestWeight = 0;
+  for (const [size, weight] of weights) {
+    if (weight > bestWeight) {
+      best = size;
+      bestWeight = weight;
+    }
+  }
+  return best;
+}
+
+/**
+ * Czy fragment tekstu jest niewidoczny dla czytelnika: mikroskopijny względem reszty dokumentu
+ * albo położony poza stroną. `transform` to macierz [a, b, c, d, x, y] z pdf.js
+ * (współrzędne strony, 1 pt = 1 jednostka).
  */
 export function isHiddenTextItem(
   transform: readonly number[],
   pageWidth: number,
   pageHeight: number,
+  documentFontSize: number,
 ): boolean {
-  const [, , c = 0, d = 0, x = 0, y = 0] = transform;
-  const fontSize = Math.hypot(c, d);
-  if (fontSize < MIN_VISIBLE_FONT_SIZE_PT) return true;
+  const [, , , , x = 0, y = 0] = transform;
+  const fontSize = fontSizeOf(transform);
+  if (fontSize < HIDDEN_TEXT_RULES.alwaysHiddenBelowPt) return true;
+  const tinyRelative =
+    fontSize < HIDDEN_TEXT_RULES.absoluteMaxPt &&
+    fontSize < documentFontSize * HIDDEN_TEXT_RULES.relativeFactor;
+  if (tinyRelative) return true;
   return x < -fontSize || y < -fontSize || x > pageWidth || y > pageHeight + fontSize;
 }
 
@@ -66,18 +110,38 @@ export async function extractPdfText(file: File): Promise<ExtractedPdf> {
   const loadingTask = pdfjs.getDocument({ data });
   try {
     const pdf = await loadingTask.promise;
-    const pageTexts: string[] = [];
-    let hiddenFragments = 0;
 
+    // Przebieg 1: odczyt wszystkich stron (potrzebujemy dominującego rozmiaru czcionki całości).
+    const pages: { width: number; height: number; items: TextItem[] }[] = [];
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
       const { width, height } = page.getViewport({ scale: 1 });
       const content = await page.getTextContent();
+      const items = content.items.filter((item): item is TextItem => 'str' in item);
+      pages.push({ width, height, items });
+      page.cleanup();
+    }
+
+    const documentFontSize = dominantFontSize(
+      pages.flatMap((page) =>
+        page.items.map((item) => ({
+          size: fontSizeOf(item.transform),
+          chars: item.str.trim().length,
+        })),
+      ),
+    );
+
+    // Przebieg 2: składanie tekstu z pominięciem fragmentów niewidocznych dla czytelnika.
+    const pageTexts: string[] = [];
+    let hiddenFragments = 0;
+    for (const { width, height, items } of pages) {
       let pageText = '';
       let inHiddenRun = false;
-      for (const item of content.items) {
-        if (!('str' in item)) continue;
-        if (item.str.trim() !== '' && isHiddenTextItem(item.transform, width, height)) {
+      for (const item of items) {
+        if (
+          item.str.trim() !== '' &&
+          isHiddenTextItem(item.transform, width, height, documentFontSize)
+        ) {
           // ciąg sąsiednich ukrytych elementów liczymy jako jeden fragment
           if (!inHiddenRun) hiddenFragments++;
           inHiddenRun = true;
@@ -87,7 +151,6 @@ export async function extractPdfText(file: File): Promise<ExtractedPdf> {
         pageText += item.str + (item.hasEOL ? '\n' : '');
       }
       pageTexts.push(pageText.replace(/[ \t]+/g, ' ').trim());
-      page.cleanup();
     }
 
     const text = pageTexts
