@@ -25,21 +25,25 @@ w uporządkowane dane JSON (zadanie rekrutacyjne — Vibe Coder).
 ## Architektura
 
 ```
-Przeglądarka (GitHub Pages)                  Cloudflare Worker                 Groq (LLM)
-┌────────────────────────────────┐  tekst   ┌──────────────────────────┐      ┌──────────┐
-│ 1. walidacja pliku (typ, 10 MB)│ ───────► │ CORS + kontrola Origin   │ ───► │ Llama 4  │
-│ 2. pdf.js → tekst + l. stron   │          │ limit żądań na IP        │ ◄─── │ Scout    │
-│ 4. Zod → widok → eksport .json │ ◄─────── │ prompt + walidacja Zod   │      └──────────┘
-│    filtr ukrytego tekstu       │   JSON   │ 1 ponowna próba, grounding│
-│    historia w localStorage     │          │ wycinanie poleceń dla AI │
-└────────────────────────────────┘          └──────────────────────────┘
+Przeglądarka (GitHub Pages)              Cloudflare Worker                     Modele AI
+┌──────────────────────────────┐ tekst  ┌────────────────────────────┐     ┌───────────────────┐
+│ walidacja pliku (PDF, 10 MB) │ ─────► │ CORS + kontrola Origin     │  1. │ Workers AI        │
+│ pdf.js → tekst + l. stron    │        │ limit żądań na IP          │ ──► │ Llama 3.3 70B     │
+│ filtr ukrytego tekstu        │        │ wycinanie poleceń dla AI   │     ├───────────────────┤
+│ Zod → widok → eksport .json  │ ◄───── │ pamięć podręczna (KV, 7 d) │  2. │ Groq gpt-oss-120b │
+│ historia w localStorage      │  JSON  │ prompt, walidacja, 1 retry │  3. │ Groq gpt-oss-20b  │
+└──────────────────────────────┘        │ grounding kwot i dat       │     └───────────────────┘
+                                        └────────────────────────────┘
 ```
 
 - **Frontend** — React 19 + TypeScript (strict) + Vite, hostowany na GitHub Pages
   (deploy przez GitHub Actions).
 - **Backend** — Cloudflare Worker (`worker/`), jedyne miejsce, gdzie znajduje się klucz API.
-- **AI** — dowolne API zgodne z OpenAI Chat Completions; domyślnie Groq
-  `meta-llama/llama-4-scout-17b-16e-instruct`.
+- **AI** — łańcuch darmowych dostawców: **Cloudflare Workers AI** (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`,
+  przez binding — bez klucza API), a gdy wyczerpie dzienny limit lub nie odpowiada — **Groq**
+  (`openai/gpt-oss-120b`, potem `openai/gpt-oss-20b`; dowolne API zgodne z OpenAI Chat Completions).
+- **Pamięć podręczna** — Cloudflare KV: ten sam dokument drugi raz = natychmiastowy wynik bez
+  zużywania limitów AI.
 
 ### Struktura
 
@@ -48,8 +52,9 @@ src/
   api/          klient backendu (fetch + walidacja odpowiedzi)
   components/   komponenty React (dropzone, stany, wyniki, historia, podgląd JSON)
   lib/          schemat Zod, odczyt PDF, walidacja pliku, eksport, historia, formatowanie
-worker/src/     Cloudflare Worker: routing, CORS, prompt, wywołanie LLM, normalizacja,
-                dzielenie długich dokumentów, grounding
+worker/src/     Cloudflare Worker: routing, CORS, prompt, łańcuch dostawców AI, pamięć
+                podręczna, normalizacja, dzielenie długich dokumentów, grounding,
+                wykrywanie poleceń dla AI
 .github/        GitHub Actions: lint › test › build › deploy
 ```
 
@@ -73,16 +78,28 @@ worker/src/     Cloudflare Worker: routing, CORS, prompt, wywołanie LLM, normal
    dzielony na fragmenty (granice akapitów/zdań), analizowany równolegle, a wyniki łączone:
    listy deterministycznie (unie bez duplikatów, głosowanie typu/języka), podsumowanie —
    dodatkowym wywołaniem modelu.
-8. **Dostawca AI wymienny jedną zmienną.** Worker mówi protokołem OpenAI Chat Completions,
-   więc zmiana dostawcy to zmiana `LLM_BASE_URL` i `LLM_MODEL`. Wybrałem Groq, bo jest szybki
-   (cel < 30 s) i ma darmowy plan; darmowy plan Gemini API wg regulaminu Google nie może
-   obsługiwać użytkowników z UE.
-9. **Brak routera.** Aplikacja ma jeden ekran ze stanami, więc problem routingu na GitHub Pages
-   (HashRouter / 404.html) w ogóle nie występuje.
+8. **Łańcuch darmowych dostawców AI.** Każdy darmowy plan ma inne ograniczenie, więc Worker
+   próbuje ich po kolei i przechodzi dalej przy wyczerpanym limicie, błędzie lub przekroczonym
+   czasie. Limity się sumują, a demo działa dłużej bez opłat:
+   - **Cloudflare Workers AI** — 10 tys. „neuronów” dziennie (ok. 15–20 analiz), połączenie przez
+     binding, więc **nie ma klucza API, który mógłby wyciec**; dane nie są używane do trenowania;
+   - **Groq** — szybki, ale darmowy plan ma 8 tys. tokenów na minutę, więc obsługuje tylko
+     krótsze dokumenty (do ok. 10 tys. znaków); większych zapytań Worker tam nie wysyła wcale.
+
+   Odrzucone: darmowy Gemini API (regulamin Google nie pozwala obsługiwać nim użytkowników
+   z UE), darmowy Mistral (plan Free nie aktywuje kluczy API), SambaNova i OpenRouter
+   (ok. 20–50 zapytań dziennie), Cerebras (wymaga karty).
+
+9. **Pamięć podręczna wyników.** Kluczem jest skrót SHA-256 oczyszczonego tekstu i wersji promptu;
+   wpis wygasa po 7 dniach. Najczęstszy scenariusz — wiele osób testuje ten sam przykładowy PDF —
+   kosztuje jedno wywołanie modelu. Nazwa pliku i liczba stron nie są zapisywane.
+10. **Brak routera.** Aplikacja ma jeden ekran ze stanami, więc problem routingu na GitHub Pages
+    (HashRouter / 404.html) w ogóle nie występuje.
 
 ## Bezpieczeństwo
 
-- Klucz API wyłącznie w sekretach Cloudflare (`wrangler secret put`) — nigdy we frontendzie
+- Główny dostawca (Workers AI) działa przez binding — bez klucza API. Klucz dostawcy zapasowego
+  (Groq) jest wyłącznie w sekretach Cloudflare (`wrangler secret put`) — nigdy we frontendzie
   ani w repozytorium (`.env`, `.dev.vars` są w `.gitignore`).
 - CORS ograniczony do `https://sebastiangawlinski.github.io`; Worker dodatkowo sam sprawdza
   nagłówek `Origin` i odrzuca żądania z innych domen (403).
@@ -109,12 +126,14 @@ worker/src/     Cloudflare Worker: routing, CORS, prompt, wywołanie LLM, normal
   5. **Przejrzystość** — wynik zawiera `meta.security` i widoczne ostrzeżenie z listą
      pominiętych fragmentów.
 - Bez `dangerouslySetInnerHTML` — cały tekst renderuje React (escapowanie).
-- Użytkownik widzi informację, że tekst pliku trafia do zewnętrznego API AI.
+- Użytkownik widzi informację, że tekst pliku trafia do zewnętrznego API AI i że wynik jest
+  przechowywany przez 7 dni (pamięć podręczna).
 
 ## Uruchomienie lokalne
 
-Wymagania: Node.js 20.19+ (zalecany 22 LTS), konto Groq (darmowy klucz API:
-https://console.groq.com/keys).
+Wymagania: Node.js 20.19+ (zalecany 22 LTS), konto Cloudflare (Workers AI, KV) i opcjonalnie
+konto Groq (darmowy klucz API: https://console.groq.com/keys). Lokalny Worker łączy się
+z prawdziwym Workers AI, więc wymaga `npx wrangler login` i zużywa ten sam dzienny limit.
 
 ```bash
 npm install
@@ -142,13 +161,14 @@ npm run dev
 
 ### Zmienne środowiskowe
 
-| Zmienna           | Gdzie                                 | Opis                                                             |
-| ----------------- | ------------------------------------- | ---------------------------------------------------------------- |
-| `VITE_API_URL`    | `.env.local` / GitHub → Variables     | adres Workera, np. `https://pdf-insight-api.<konto>.workers.dev` |
-| `LLM_API_KEY`     | sekret Workera / `worker/.dev.vars`   | klucz API dostawcy LLM (**sekret**)                              |
-| `LLM_BASE_URL`    | `worker/wrangler.jsonc`               | URL API zgodnego z OpenAI                                        |
-| `LLM_MODEL`       | `worker/wrangler.jsonc`               | identyfikator modelu                                             |
-| `ALLOWED_ORIGINS` | `worker/wrangler.jsonc` / `.dev.vars` | dozwolone domeny (CORS), rozdzielone przecinkami                 |
+| Zmienna            | Gdzie                                 | Opis                                                             |
+| ------------------ | ------------------------------------- | ---------------------------------------------------------------- |
+| `VITE_API_URL`     | `.env.local` / GitHub → Variables     | adres Workera, np. `https://pdf-insight-api.<konto>.workers.dev` |
+| `WORKERS_AI_MODEL` | `worker/wrangler.jsonc`               | model Workers AI (główny dostawca)                               |
+| `LLM_API_KEY`      | sekret Workera / `worker/.dev.vars`   | klucz Groq — dostawca zapasowy (**sekret**)                      |
+| `LLM_BASE_URL`     | `worker/wrangler.jsonc`               | URL API zgodnego z OpenAI (dostawca zapasowy)                    |
+| `LLM_MODELS`       | `worker/wrangler.jsonc`               | modele zapasowe w kolejności użycia, rozdzielone przecinkami     |
+| `ALLOWED_ORIGINS`  | `worker/wrangler.jsonc` / `.dev.vars` | dozwolone domeny (CORS), rozdzielone przecinkami                 |
 
 ## Wdrożenie
 
@@ -156,7 +176,8 @@ npm run dev
 
 ```bash
 npx wrangler login
-npx wrangler secret put LLM_API_KEY --config worker/wrangler.jsonc
+npx wrangler kv namespace create PDF_CACHE    # id wpisz w worker/wrangler.jsonc
+npx wrangler secret put LLM_API_KEY --config worker/wrangler.jsonc   # klucz Groq (opcjonalny)
 npm run worker:deploy
 ```
 
@@ -172,13 +193,17 @@ lint › testy › build › deploy.
 Testy jednostkowe (Vitest) obejmują m.in.: walidację schematu (wymagane pola, ISO 8601,
 ISO 639-1, ISO 4217, liczba punktów), normalizację odpowiedzi modelu, mechanizm jednej ponownej
 próby, grounding kwot i dat, wykrywanie poleceń dla AI, filtr ukrytego tekstu, losowy znacznik bloku, dzielenie i łączenie
-długich dokumentów, CORS i walidację żądań Workera, historię w `localStorage` oraz walidację plików.
+długich dokumentów, łańcuch dostawców AI (przełączanie przy limicie, pomijanie za dużych
+zapytań), pamięć podręczną, CORS i walidację żądań Workera, historię w `localStorage` oraz walidację plików.
 
 ## Znane ograniczenia
 
 - **Brak OCR (F-10)** — skany bez warstwy tekstowej dostają czytelny komunikat.
-- **Darmowy plan Groq** ma limity (m.in. tokeny na minutę i na dzień) — przy dużym ruchu
-  użytkownik zobaczy komunikat o chwilowym limicie.
+- **Darmowe limity AI:** Workers AI to ok. 15–20 analiz dziennie (reset o 00:00 UTC), Groq
+  obsługuje tylko krótsze dokumenty. Gdy Workers AI wyczerpie limit, dłuższy dokument (np. testowa
+  12-stronicowa umowa) dostanie komunikat o limicie — chyba że był już analizowany i jest
+  w pamięci podręcznej.
+- Wyniki analiz są przechowywane w pamięci podręcznej przez 7 dni (bez nazwy pliku).
 - Dokumenty dłuższe niż ~60 tys. znaków są analizowane częściowo (informacja w wyniku
   i w `meta.truncated`).
 - Grounding sprawdza, czy kwota/data **występuje** w dokumencie, a nie czy model dobrze opisał
