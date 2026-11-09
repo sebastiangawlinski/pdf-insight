@@ -1,0 +1,48 @@
+# Backend: deploy Cloudflare Workera (opcjonalny — wymaga sekretów w repozytorium).
+# Sekrety: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, LLM_API_KEY.
+# Bez nich job się pomija — Workera można też wdrożyć ręcznie: npm run worker:deploy
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - 'src/lib/schema.ts'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - name: Brak sekretów Cloudflare — pomijam
+        if: env.HAS_TOKEN != 'true'
+        run: echo "::notice::Brak CLOUDFLARE_API_TOKEN — deploy Workera pominięty."
+      - uses: actions/checkout@v7
+        if: env.HAS_TOKEN == 'true'
+      - uses: actions/setup-node@v7
+        if: env.HAS_TOKEN == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        if: env.HAS_TOKEN == 'true'
+      - name: Testy przed wdrożeniem
+        if: env.HAS_TOKEN == 'true'
+        run: npm test
+      - uses: cloudflare/wrangler-action@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config worker/wrangler.jsonc
+          secrets: |
+            LLM_API_KEY
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
