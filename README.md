@@ -28,7 +28,7 @@ w uporządkowane dane JSON (zadanie rekrutacyjne — Vibe Coder).
 Przeglądarka (GitHub Pages)              Cloudflare Worker                     Modele AI
 ┌──────────────────────────────┐ tekst  ┌────────────────────────────┐     ┌───────────────────┐
 │ walidacja pliku (PDF, 10 MB) │ ─────► │ CORS + kontrola Origin     │  1. │ Workers AI        │
-│ pdf.js → tekst + l. stron    │        │ limit żądań na IP          │ ──► │ Llama 3.3 70B     │
+│ pdf.js → tekst + l. stron    │        │ limit żądań na IP          │ ──► │ Gemma 4 26B       │
 │ filtr ukrytego tekstu        │        │ wycinanie poleceń dla AI   │     ├───────────────────┤
 │ Zod → widok → eksport .json  │ ◄───── │ pamięć podręczna (KV, 7 d) │  2. │ Groq gpt-oss-120b │
 │ historia w localStorage      │  JSON  │ prompt, walidacja, 1 retry │  3. │ Groq gpt-oss-20b  │
@@ -39,11 +39,14 @@ Przeglądarka (GitHub Pages)              Cloudflare Worker                     
 - **Frontend** — React 19 + TypeScript (strict) + Vite, hostowany na GitHub Pages
   (deploy przez GitHub Actions).
 - **Backend** — Cloudflare Worker (`worker/`), jedyne miejsce, gdzie znajduje się klucz API.
-- **AI** — łańcuch darmowych dostawców: **Cloudflare Workers AI** (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`,
+- **AI** — łańcuch darmowych dostawców: **Cloudflare Workers AI** (`@cf/google/gemma-4-26b-a4b-it`,
   przez binding — bez klucza API), a gdy wyczerpie dzienny limit lub nie odpowiada — **Groq**
   (`openai/gpt-oss-120b`, potem `openai/gpt-oss-20b`; dowolne API zgodne z OpenAI Chat Completions).
 - **Pamięć podręczna** — Cloudflare KV: ten sam dokument drugi raz = natychmiastowy wynik bez
   zużywania limitów AI.
+- **Diagnostyka** — gdy analiza się nie uda, widok błędu ma zwijaną sekcję „Szczegóły techniczne”:
+  co zawiodło u którego dostawcy i po ilu sekundach (np. przekroczony czas, wyczerpany limit,
+  dokument za duży).
 
 ### Struktura
 
@@ -81,7 +84,7 @@ worker/src/     Cloudflare Worker: routing, CORS, prompt, łańcuch dostawców A
 8. **Łańcuch darmowych dostawców AI.** Każdy darmowy plan ma inne ograniczenie, więc Worker
    próbuje ich po kolei i przechodzi dalej przy wyczerpanym limicie, błędzie lub przekroczonym
    czasie. Limity się sumują, a demo działa dłużej bez opłat:
-   - **Cloudflare Workers AI** — 10 tys. „neuronów” dziennie (ok. 15–20 analiz), połączenie przez
+   - **Cloudflare Workers AI** — 10 tys. „neuronów” dziennie (ok. 80–90 analiz), połączenie przez
      binding, więc **nie ma klucza API, który mógłby wyciec**; dane nie są używane do trenowania;
    - **Groq** — szybki, ale darmowy plan ma 8 tys. tokenów na minutę, więc obsługuje tylko
      krótsze dokumenty (do ok. 10 tys. znaków); większych zapytań Worker tam nie wysyła wcale.
@@ -90,10 +93,17 @@ worker/src/     Cloudflare Worker: routing, CORS, prompt, łańcuch dostawców A
    z UE), darmowy Mistral (plan Free nie aktywuje kluczy API), SambaNova i OpenRouter
    (ok. 20–50 zapytań dziennie), Cerebras (wymaga karty).
 
-9. **Pamięć podręczna wyników.** Kluczem jest skrót SHA-256 oczyszczonego tekstu i wersji promptu;
-   wpis wygasa po 7 dniach. Najczęstszy scenariusz — wiele osób testuje ten sam przykładowy PDF —
-   kosztuje jedno wywołanie modelu. Nazwa pliku i liczba stron nie są zapisywane.
-10. **Brak routera.** Aplikacja ma jeden ekran ze stanami, więc problem routingu na GitHub Pages
+9. **Model: Gemma 4 26B zamiast Llama 3.3 70B.** Llama 70B nie mieściła się w limicie czasu
+   (analiza 12-stronicowej umowy przekraczała 25 s). Gemma 4 26B A4B to model MoE — w każdym kroku
+   pracuje tylko ok. 4 mld parametrów — więc jest wyraźnie szybsza i kilkukrotnie tańsza w limicie
+   dziennym. Dodatkowo: wyłączony tryb „myślenia” (`enable_thinking: false`; ewentualne „myśli”
+   w odpowiedzi są wycinane przed odczytem JSON) i zwięzła odpowiedź (maks. 1,5 tys. tokenów,
+   krótkie opisy, do 12 kwot i 10 dat). Analiza testowej umowy mieści się w wymaganych 30 s,
+   a ponowna analiza tego samego dokumentu (pamięć podręczna) jest natychmiastowa.
+10. **Pamięć podręczna wyników.** Kluczem jest skrót SHA-256 oczyszczonego tekstu i wersji promptu;
+    wpis wygasa po 7 dniach. Najczęstszy scenariusz — wiele osób testuje ten sam przykładowy PDF —
+    kosztuje jedno wywołanie modelu. Nazwa pliku i liczba stron nie są zapisywane.
+11. **Brak routera.** Aplikacja ma jeden ekran ze stanami, więc problem routingu na GitHub Pages
     (HashRouter / 404.html) w ogóle nie występuje.
 
 ## Bezpieczeństwo
@@ -199,7 +209,7 @@ zapytań), pamięć podręczną, CORS i walidację żądań Workera, historię w
 ## Znane ograniczenia
 
 - **Brak OCR (F-10)** — skany bez warstwy tekstowej dostają czytelny komunikat.
-- **Darmowe limity AI:** Workers AI to ok. 15–20 analiz dziennie (reset o 00:00 UTC), Groq
+- **Darmowe limity AI:** Workers AI to ok. 80–90 analiz dziennie (reset o 00:00 UTC), Groq
   obsługuje tylko krótsze dokumenty. Gdy Workers AI wyczerpie limit, dłuższy dokument (np. testowa
   12-stronicowa umowa) dostanie komunikat o limicie — chyba że był już analizowany i jest
   w pamięci podręcznej.
@@ -239,10 +249,18 @@ Zgodny z sekcją 04 briefu; dodatkowe pole `meta` (dozwolone — „pola można 
   "dates": [{ "date": "2026-10-01", "context": "termin płatności" }],
   "keywords": ["serwis", "SLA"],
   "meta": {
-    "model": "…",
-    "analyzedAt": "2026-11-09T15:30:00.000Z",
+    "model": "Workers AI / @cf/google/gemma-4-26b-a4b-it",
+    "provider": "Workers AI",
+    "analyzedAt": "2026-11-09T20:36:51.176Z",
+    "cached": false,
     "chunks": 1,
-    "truncated": false
+    "truncated": false,
+    "security": {
+      "hiddenFragmentsRemoved": 1,
+      "suspiciousFragmentsRemoved": 0,
+      "removedExcerpts": [],
+      "notices": ["Pominięto tekst niewidoczny dla czytelnika (…) — liczba fragmentów: 1."]
+    }
   }
 }
 ```
