@@ -7,6 +7,8 @@ const requestSchema = z.object({
   fileName: z.string().trim().min(1).max(LIMITS.maxFileNameLength),
   pages: z.number().int().min(1).max(LIMITS.maxPages),
   text: z.string().trim().min(1),
+  /** Liczba fragmentów ukrytego tekstu pominiętych przez frontend (tylko do raportu). */
+  hiddenFragments: z.number().int().min(0).max(100_000).default(0),
 });
 
 /** Odczytuje i waliduje ciało żądania POST /analyze z limitem rozmiaru. */

@@ -62,12 +62,27 @@ export const aiAnalysisSchema = z.object({
 
 export type AiAnalysis = z.infer<typeof aiAnalysisSchema>;
 
+/** Raport z zabezpieczeń przed prompt injection — co zostało pominięte przed analizą i dlaczego. */
+export const securityReportSchema = z.object({
+  /** Fragmenty tekstu niewidoczne dla czytelnika (mikroskopijna czcionka, poza stroną). */
+  hiddenFragmentsRemoved: z.number().int().nonnegative(),
+  /** Fragmenty wyglądające na polecenia dla AI. */
+  suspiciousFragmentsRemoved: z.number().int().nonnegative(),
+  /** Skróty usuniętych podejrzanych fragmentów — dla przejrzystości. */
+  removedExcerpts: z.array(z.string()).max(10),
+  /** Komunikaty dla użytkownika (po polsku). */
+  notices: z.array(z.string()),
+});
+
+export type SecurityReport = z.infer<typeof securityReportSchema>;
+
 /** Dodatkowe informacje techniczne (brief pozwala dodawać pola). */
 export const analysisMetaSchema = z.object({
   model: z.string(),
   analyzedAt: z.iso.datetime(),
   chunks: z.number().int().positive(),
   truncated: z.boolean(),
+  security: securityReportSchema,
 });
 
 /** Pełny wynik zwracany użytkownikowi i eksportowany do pliku .json. */

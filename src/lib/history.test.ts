@@ -24,7 +24,18 @@ function analysis(fileName: string, analyzedAt: string): Analysis {
     amounts: [],
     dates: [],
     keywords: [],
-    meta: { model: 'm', analyzedAt, chunks: 1, truncated: false },
+    meta: {
+      model: 'm',
+      analyzedAt,
+      chunks: 1,
+      truncated: false,
+      security: {
+        hiddenFragmentsRemoved: 0,
+        suspiciousFragmentsRemoved: 0,
+        removedExcerpts: [],
+        notices: [],
+      },
+    },
   };
 }
 

@@ -23,6 +23,12 @@ function validAnalysis() {
       analyzedAt: '2026-11-09T14:00:00.000Z',
       chunks: 1,
       truncated: false,
+      security: {
+        hiddenFragmentsRemoved: 0,
+        suspiciousFragmentsRemoved: 0,
+        removedExcerpts: [],
+        notices: [],
+      },
     },
   };
 }

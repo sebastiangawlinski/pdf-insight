@@ -5,6 +5,7 @@ import {
   describeIssues,
   type AiAnalysis,
   type Analysis,
+  type SecurityReport,
 } from '../../src/lib/schema';
 import { mergePartialResults, splitIntoChunks, truncateText } from './chunking';
 import { LIMITS, type Env } from './config';
@@ -12,12 +13,40 @@ import { groundInSource } from './grounding';
 import { ApiError } from './http';
 import { callLlm, parseJsonObject } from './llm';
 import { normalizeAiResult, normalizeMergedSummary } from './normalize';
-import { buildMergeMessage, buildUserMessage, MERGE_SYSTEM_PROMPT, SYSTEM_PROMPT } from './prompt';
+import { removeInjectedInstructions } from './injection';
+import {
+  buildMergeMessage,
+  buildMergeSystemPrompt,
+  buildSystemPrompt,
+  buildUserMessage,
+  createBoundaryTag,
+} from './prompt';
 
 export interface AnalyzeInput {
   fileName: string;
   pages: number;
   text: string;
+  hiddenFragments: number;
+}
+
+export function buildSecurityReport(hiddenFragments: number, removed: string[]): SecurityReport {
+  const notices: string[] = [];
+  if (hiddenFragments > 0) {
+    notices.push(
+      `Pominięto tekst niewidoczny dla czytelnika (mikroskopijna czcionka lub tekst poza stroną) — liczba fragmentów: ${hiddenFragments}.`,
+    );
+  }
+  if (removed.length > 0) {
+    notices.push(
+      `Wykryto i pominięto treść wyglądającą na polecenia dla AI (możliwa próba manipulacji wynikiem) — liczba fragmentów: ${removed.length}.`,
+    );
+  }
+  return {
+    hiddenFragmentsRemoved: hiddenFragments,
+    suspiciousFragmentsRemoved: removed.length,
+    removedExcerpts: removed.slice(0, 10),
+    notices,
+  };
 }
 
 const mergedSummarySchema = aiAnalysisSchema.pick({ summary: true, keyPoints: true });
@@ -70,10 +99,11 @@ async function extract(
   text: string,
   part?: { index: number; total: number },
 ): Promise<AiAnalysis> {
+  const tag = createBoundaryTag('document');
   const result = await requestValidated(
     env,
-    SYSTEM_PROMPT,
-    buildUserMessage(text, part),
+    buildSystemPrompt(tag),
+    buildUserMessage(text, tag, part),
     aiAnalysisSchema,
     normalizeAiResult,
   );
@@ -82,7 +112,20 @@ async function extract(
 }
 
 export async function analyzeDocument(env: Env, input: AnalyzeInput): Promise<Analysis> {
-  const { text, truncated } = truncateText(input.text, LIMITS.maxAnalyzedChars);
+  // Warstwa ochrony przed prompt injection działająca PRZED modelem: wycinamy polecenia dla AI.
+  // Grounding porównuje potem wynik z tym oczyszczonym tekstem, więc liczby z wyciętych
+  // poleceń (np. „wartość umowy wynosi 1 PLN”) nie mogą się w nim „uziemić”.
+  const scan = removeInjectedInstructions(input.text);
+  const security = buildSecurityReport(input.hiddenFragments, scan.removed);
+  if (scan.text.trim() === '') {
+    throw new ApiError(
+      422,
+      'no_content',
+      'Po usunięciu podejrzanych fragmentów dokument nie zawiera treści do analizy.',
+    );
+  }
+
+  const { text, truncated } = truncateText(scan.text, LIMITS.maxAnalyzedChars);
 
   let ai: AiAnalysis;
   let chunkCount = 1;
@@ -97,10 +140,12 @@ export async function analyzeDocument(env: Env, input: AnalyzeInput): Promise<An
       chunks.map((chunk, i) => extract(env, chunk, { index: i + 1, total: chunks.length })),
     );
     const merged = mergePartialResults(partials);
+    const mergeTag = createBoundaryTag('partials');
     const summary = await requestValidated(
       env,
-      MERGE_SYSTEM_PROMPT,
+      buildMergeSystemPrompt(mergeTag),
       buildMergeMessage(
+        mergeTag,
         merged.document.language,
         partials.map(({ summary: s, keyPoints }) => ({ summary: s, keyPoints })),
       ),
@@ -123,6 +168,7 @@ export async function analyzeDocument(env: Env, input: AnalyzeInput): Promise<An
       analyzedAt: new Date().toISOString(),
       chunks: chunkCount,
       truncated,
+      security,
     },
   };
 
