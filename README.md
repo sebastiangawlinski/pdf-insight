@@ -1,0 +1,203 @@
+# PDF Insight
+
+Aplikacja webowa, która wczytuje plik PDF, tworzy jego krótkie podsumowanie i zamienia treść
+w uporządkowane dane JSON (zadanie rekrutacyjne — Vibe Coder).
+
+**Demo:** https://sebastiangawlinski.github.io/pdf-insight/
+
+![Widok wyniku analizy](docs/screenshot.png)
+
+## Co potrafi
+
+| ID   | Wymaganie                                                           | Status                 |
+| ---- | ------------------------------------------------------------------- | ---------------------- |
+| F-01 | Wgrywanie PDF: drag & drop i wybór pliku, tylko PDF, maks. 10 MB    | ✅                     |
+| F-02 | Ekstrakcja tekstu z PDF z warstwą tekstową (pdf.js w przeglądarce)  | ✅                     |
+| F-03 | Podsumowanie 3–5 zdań w języku dokumentu, bez zmyślonych informacji | ✅                     |
+| F-04 | Dane zgodne ze schematem, walidowane (Zod) przed wyświetleniem      | ✅                     |
+| F-05 | Czytelny widok wyników, podgląd JSON, pobranie pliku `.json`        | ✅                     |
+| F-06 | Stany: ładowanie, błąd z opcją ponowienia, stan pusty               | ✅                     |
+| F-07 | Publiczne demo na GitHub Pages                                      | ✅                     |
+| F-08 | Długie dokumenty: podział na fragmenty i łączenie wyników           | ✅                     |
+| F-09 | Historia ostatnich 5 analiz w `localStorage`                        | ✅                     |
+| F-10 | OCR skanów                                                          | ❌ świadomie pominięte |
+
+## Architektura
+
+```
+Przeglądarka (GitHub Pages)                  Cloudflare Worker                 Groq (LLM)
+┌────────────────────────────────┐  tekst   ┌──────────────────────────┐      ┌──────────┐
+│ 1. walidacja pliku (typ, 10 MB)│ ───────► │ CORS + kontrola Origin   │ ───► │ Llama 4  │
+│ 2. pdf.js → tekst + l. stron   │          │ limit żądań na IP        │ ◄─── │ Scout    │
+│ 4. Zod → widok → eksport .json │ ◄─────── │ prompt + walidacja Zod   │      └──────────┘
+│    historia w localStorage     │   JSON   │ 1 ponowna próba, grounding│
+└────────────────────────────────┘          └──────────────────────────┘
+```
+
+- **Frontend** — React 19 + TypeScript (strict) + Vite, hostowany na GitHub Pages
+  (deploy przez GitHub Actions).
+- **Backend** — Cloudflare Worker (`worker/`), jedyne miejsce, gdzie znajduje się klucz API.
+- **AI** — dowolne API zgodne z OpenAI Chat Completions; domyślnie Groq
+  `meta-llama/llama-4-scout-17b-16e-instruct`.
+
+### Struktura
+
+```
+src/
+  api/          klient backendu (fetch + walidacja odpowiedzi)
+  components/   komponenty React (dropzone, stany, wyniki, historia, podgląd JSON)
+  lib/          schemat Zod, odczyt PDF, walidacja pliku, eksport, historia, formatowanie
+worker/src/     Cloudflare Worker: routing, CORS, prompt, wywołanie LLM, normalizacja,
+                dzielenie długich dokumentów, grounding
+.github/        GitHub Actions: lint › test › build › deploy
+```
+
+## Najważniejsze decyzje
+
+1. **Tekst z PDF wyciąga przeglądarka (pdf.js), nie serwer.** Do backendu trafia tylko tekst —
+   mniejszy transfer, szybsza odpowiedź, a sam plik nie opuszcza komputera użytkownika.
+2. **Fakty znane aplikacji nie pochodzą od AI.** `fileName` i `pages` ustawia aplikacja;
+   model generuje tylko to, czego nie da się policzyć deterministycznie.
+3. **Jeden schemat dla frontendu i backendu** (`src/lib/schema.ts`). Worker waliduje odpowiedź
+   modelu, frontend waliduje odpowiedź API przed wyświetleniem, testy sprawdzają ten sam schemat.
+4. **Normalizacja przed walidacją.** Drobne, jednoznaczne usterki formatu (`"zł"` → `"PLN"`,
+   `"12 500,00"` → `12500`, `"PL"` → `"pl"`) są poprawiane w kodzie; błędne wartości są usuwane
+   (null / pominięcie), nigdy dopisywane.
+5. **Ponowna próba zgodnie z briefem:** przy odpowiedzi niezgodnej ze schematem model dostaje
+   swoją odpowiedź i listę błędów walidacji — jedna ponowna próba, potem komunikat błędu.
+6. **Grounding w tekście źródłowym.** Każda kwota i data zwrócona przez model musi występować
+   w tekście PDF — inaczej jest usuwana. To deterministyczna ochrona przed halucynacjami
+   i skutkami prompt injection.
+7. **Długie dokumenty (F-08):** tekst do 24 tys. znaków idzie w jednym zapytaniu; dłuższy jest
+   dzielony na fragmenty (granice akapitów/zdań), analizowany równolegle, a wyniki łączone:
+   listy deterministycznie (unie bez duplikatów, głosowanie typu/języka), podsumowanie —
+   dodatkowym wywołaniem modelu.
+8. **Dostawca AI wymienny jedną zmienną.** Worker mówi protokołem OpenAI Chat Completions,
+   więc zmiana dostawcy to zmiana `LLM_BASE_URL` i `LLM_MODEL`. Wybrałem Groq, bo jest szybki
+   (cel < 30 s) i ma darmowy plan; darmowy plan Gemini API wg regulaminu Google nie może
+   obsługiwać użytkowników z UE.
+9. **Brak routera.** Aplikacja ma jeden ekran ze stanami, więc problem routingu na GitHub Pages
+   (HashRouter / 404.html) w ogóle nie występuje.
+
+## Bezpieczeństwo
+
+- Klucz API wyłącznie w sekretach Cloudflare (`wrangler secret put`) — nigdy we frontendzie
+  ani w repozytorium (`.env`, `.dev.vars` są w `.gitignore`).
+- CORS ograniczony do `https://sebastiangawlinski.github.io`; Worker dodatkowo sam sprawdza
+  nagłówek `Origin` i odrzuca żądania z innych domen (403).
+- Limit żądań: 6 analiz / minutę / IP (Cloudflare Rate Limiting). Limit rozmiaru: plik 10 MB
+  (frontend), ciało żądania 2 MB, analizowane maks. 60 tys. znaków (Worker).
+- Prompt injection: treść PDF trafia do modelu w bloku `<document>…</document>`, a instrukcja
+  systemowa traktuje ją jako dane. Znaczniki, którymi tekst mógłby „wyjść” z bloku, są
+  neutralizowane. Dodatkowo grounding (pkt 6) i walidacja schematu ograniczają skutki
+  ewentualnej manipulacji.
+- Bez `dangerouslySetInnerHTML` — cały tekst renderuje React (escapowanie).
+- Użytkownik widzi informację, że tekst pliku trafia do zewnętrznego API AI.
+
+## Uruchomienie lokalne
+
+Wymagania: Node.js 20.19+ (zalecany 22 LTS), konto Groq (darmowy klucz API:
+https://console.groq.com/keys).
+
+```bash
+npm install
+
+# 1) Backend (Cloudflare Worker) — http://localhost:8787
+cp worker/.dev.vars.example worker/.dev.vars   # wpisz swój LLM_API_KEY
+npm run worker:dev
+
+# 2) Frontend — http://localhost:5173/pdf-insight/
+cp .env.example .env.local                     # VITE_API_URL=http://localhost:8787
+npm run dev
+```
+
+### Skrypty
+
+| Skrypt                  | Opis                                  |
+| ----------------------- | ------------------------------------- |
+| `npm run dev`           | serwer deweloperski Vite              |
+| `npm run build`         | sprawdzenie typów + build produkcyjny |
+| `npm run lint`          | ESLint (0 ostrzeżeń)                  |
+| `npm run format:check`  | Prettier                              |
+| `npm test`              | testy jednostkowe (Vitest)            |
+| `npm run worker:dev`    | lokalny Worker (wrangler)             |
+| `npm run worker:deploy` | wdrożenie Workera                     |
+
+### Zmienne środowiskowe
+
+| Zmienna           | Gdzie                                 | Opis                                                             |
+| ----------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| `VITE_API_URL`    | `.env.local` / GitHub → Variables     | adres Workera, np. `https://pdf-insight-api.<konto>.workers.dev` |
+| `LLM_API_KEY`     | sekret Workera / `worker/.dev.vars`   | klucz API dostawcy LLM (**sekret**)                              |
+| `LLM_BASE_URL`    | `worker/wrangler.jsonc`               | URL API zgodnego z OpenAI                                        |
+| `LLM_MODEL`       | `worker/wrangler.jsonc`               | identyfikator modelu                                             |
+| `ALLOWED_ORIGINS` | `worker/wrangler.jsonc` / `.dev.vars` | dozwolone domeny (CORS), rozdzielone przecinkami                 |
+
+## Wdrożenie
+
+**Backend (raz, z własnego komputera):**
+
+```bash
+npx wrangler login
+npx wrangler secret put LLM_API_KEY --config worker/wrangler.jsonc
+npm run worker:deploy
+```
+
+Alternatywnie workflow `Deploy Worker` wdraża Workera automatycznie, jeśli w repozytorium są
+sekrety `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` i `LLM_API_KEY`.
+
+**Frontend:** Settings → Pages → Source: _GitHub Actions_, a w Settings → Secrets and variables →
+Actions → Variables dodaj `VITE_API_URL`. Każdy push na `main` uruchamia
+lint › testy › build › deploy.
+
+## Testy
+
+Testy jednostkowe (Vitest) obejmują m.in.: walidację schematu (wymagane pola, ISO 8601,
+ISO 639-1, ISO 4217, liczba punktów), normalizację odpowiedzi modelu, mechanizm jednej ponownej
+próby, grounding kwot i dat, ochronę przed wyjściem z bloku `<document>`, dzielenie i łączenie
+długich dokumentów, CORS i walidację żądań Workera, historię w `localStorage` oraz walidację plików.
+
+## Znane ograniczenia
+
+- **Brak OCR (F-10)** — skany bez warstwy tekstowej dostają czytelny komunikat.
+- **Darmowy plan Groq** ma limity (m.in. tokeny na minutę i na dzień) — przy dużym ruchu
+  użytkownik zobaczy komunikat o chwilowym limicie.
+- Dokumenty dłuższe niż ~60 tys. znaków są analizowane częściowo (informacja w wyniku
+  i w `meta.truncated`).
+- Grounding sprawdza, czy liczba/data **występuje** w dokumencie, a nie czy model dobrze opisał
+  jej kontekst.
+- Model może się mylić w ocenie typu dokumentu czy doborze kluczowych punktów — wynik zawiera
+  dopisek, by ważne informacje sprawdzić w oryginale.
+- Tekst dokumentu jest przetwarzany przez zewnętrznego dostawcę AI — aplikacja nie jest
+  przeznaczona do dokumentów poufnych.
+
+## Format wyniku
+
+Zgodny z sekcją 04 briefu; dodatkowe pole `meta` (dozwolone — „pola można dodawać”):
+
+```json
+{
+  "document": {
+    "fileName": "umowa.pdf",
+    "pages": 4,
+    "language": "pl",
+    "type": "umowa",
+    "title": "Umowa serwisowa",
+    "date": "2026-09-01"
+  },
+  "summary": "Umowa określa zasady…",
+  "keyPoints": ["Okres umowy 12 mies."],
+  "entities": { "organizations": ["Przykład sp. z o.o."], "people": [] },
+  "amounts": [{ "value": 12500, "currency": "PLN", "context": "wynagrodzenie" }],
+  "dates": [{ "date": "2026-10-01", "context": "termin płatności" }],
+  "keywords": ["serwis", "SLA"],
+  "meta": {
+    "model": "…",
+    "analyzedAt": "2026-11-09T15:30:00.000Z",
+    "chunks": 1,
+    "truncated": false
+  }
+}
+```
+
+Praca z AI jest opisana w [AI_LOG.md](AI_LOG.md).
