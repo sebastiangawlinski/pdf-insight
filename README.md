@@ -91,8 +91,11 @@ worker/src/     Cloudflare Worker: routing, CORS, prompt, wywołanie LLM, normal
 - **Prompt injection — ochrona warstwowa.** Zasada: bezpieczeństwo nie zależy od tego, czy model
   „posłucha”. Model nie ma żadnych uprawnień (nie wysyła maili, nie ma dostępu do danych), więc
   w najgorszym razie atak może zepsuć tekst wyniku — a kolejne warstwy to ograniczają:
-  1. **Filtr niewidocznego tekstu** (przeglądarka) — tekst mniejszy niż 5,5 pt lub poza stroną
-     nie trafia do analizy. Testowy PDF ukrywa polecenie białą czcionką 5 pt.
+  1. **Filtr niewidocznego tekstu** (przeglądarka) — tekst poza stroną albo wyraźnie mniejszy
+     od reszty dokumentu (< 60% dominującej czcionki i < 6 pt) nie trafia do analizy. Próg jest
+     względny, więc dokument w całości pisany drobnym drukiem (np. arkusz „dopasuj do strony”,
+     4–5 pt) jest analizowany normalnie. Testowy PDF ukrywa polecenie białą czcionką 5 pt
+     w tekście 9,5 pt.
   2. **Wykrywanie poleceń dla AI** (Worker, przed modelem) — wiersze z typowymi frazami
      (PL/EN: „zignoruj wcześniejsze polecenia”, „instrukcja dla AI”, „ignore previous
      instructions”, „SYSTEM:”…) są wycinane razem z kontynuacją złamanego zdania.
@@ -183,7 +186,8 @@ długich dokumentów, CORS i walidację żądań Workera, historię w `localStor
 - Ochrona przed prompt injection jest heurystyczna: wykrywanie fraz można obejść innym
   sformułowaniem, a tekstu ukrytego kolorem (bez zmniejszonej czcionki) lub pod obrazkiem filtr
   nie wykrywa. Dlatego działa kilka niezależnych warstw — żadna nie jest stuprocentowa.
-- Filtr ukrytego tekstu może pominąć prawdziwy, bardzo drobny druk (< 5,5 pt).
+- Filtr ukrytego tekstu może pominąć prawdziwy drobny druk, jeśli jest znacznie mniejszy od
+  reszty dokumentu (np. 5 pt w tekście 10 pt) — użytkownik dostaje wtedy ostrzeżenie.
 - Model może się mylić w ocenie typu dokumentu czy doborze kluczowych punktów — wynik zawiera
   dopisek, by ważne informacje sprawdzić w oryginale.
 - Tekst dokumentu jest przetwarzany przez zewnętrznego dostawcę AI — aplikacja nie jest
