@@ -50,7 +50,7 @@ export const aiAnalysisSchema = z.object({
     date: isoDateSchema.nullable(),
   }),
   summary: z.string().trim().min(20, 'Podsumowanie jest za krótkie').max(2000),
-  keyPoints: z.array(nonEmptyText).min(1).max(7),
+  keyPoints: z.array(nonEmptyText).min(3).max(7), // brief: 3–7 pozycji
   entities: z.object({
     organizations: z.array(nonEmptyText),
     people: z.array(nonEmptyText),

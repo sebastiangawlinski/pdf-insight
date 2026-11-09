@@ -13,7 +13,8 @@ function validAnalysis() {
       date: '2026-09-01',
     },
     summary: 'Umowa określa zasady świadczenia usług serwisowych. Obowiązuje przez 12 miesięcy.',
-    keyPoints: ['Okres umowy 12 mies.'],
+    // Przykład z briefu ma 1 punkt, ale komentarz wymaga 3–7 — uzupełniamy do 3.
+    keyPoints: ['Okres umowy 12 mies.', 'Wynagrodzenie 12 500 PLN', 'Termin płatności 1.10.2026'],
     entities: { organizations: ['Przykład sp. z o.o.'], people: [] },
     amounts: [{ value: 12500.0, currency: 'PLN', context: 'wynagrodzenie' }],
     dates: [{ date: '2026-10-01', context: 'termin płatności' }],
@@ -36,7 +37,7 @@ function validAnalysis() {
 }
 
 describe('analysisSchema', () => {
-  it('akceptuje przykład z briefu', () => {
+  it('akceptuje przykład z briefu (uzupełniony do 3 kluczowych punktów)', () => {
     expect(analysisSchema.safeParse(validAnalysis()).success).toBe(true);
   });
 
@@ -91,8 +92,10 @@ describe('analysisSchema', () => {
     expect(analysisSchema.safeParse(data).success).toBe(false);
   });
 
-  it('odrzuca pustą listę kluczowych punktów', () => {
+  it('odrzuca mniej niż 3 kluczowe punkty (brief: 3–7)', () => {
     const data = validAnalysis();
+    data.keyPoints = ['Jeden', 'Dwa'];
+    expect(analysisSchema.safeParse(data).success).toBe(false);
     data.keyPoints = [];
     expect(analysisSchema.safeParse(data).success).toBe(false);
   });

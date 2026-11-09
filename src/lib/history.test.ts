@@ -19,7 +19,7 @@ function analysis(fileName: string, analyzedAt: string): Analysis {
   return {
     document: { fileName, pages: 1, language: 'pl', type: 'inne', title: null, date: null },
     summary: 'Krótki dokument testowy. Zawiera dwa zdania.',
-    keyPoints: ['Punkt'],
+    keyPoints: ['Punkt 1', 'Punkt 2', 'Punkt 3'],
     entities: { organizations: [], people: [] },
     amounts: [],
     dates: [],
