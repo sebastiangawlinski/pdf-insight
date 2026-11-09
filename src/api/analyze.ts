@@ -7,14 +7,18 @@ const API_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export class AnalyzeError extends Error {
-  constructor(message: string) {
+  /** Szczegóły techniczne z serwera (np. co zawiodło u którego dostawcy AI). */
+  readonly details: string | undefined;
+
+  constructor(message: string, details?: string) {
     super(message);
     this.name = 'AnalyzeError';
+    this.details = details;
   }
 }
 
 const apiErrorSchema = z.object({
-  error: z.object({ code: z.string(), message: z.string() }),
+  error: z.object({ code: z.string(), message: z.string(), details: z.string().optional() }),
 });
 
 export interface AnalyzeRequest {
@@ -54,11 +58,10 @@ export async function analyzeDocument(request: AnalyzeRequest): Promise<Analysis
 
   if (!response.ok) {
     const parsedError = apiErrorSchema.safeParse(body);
-    throw new AnalyzeError(
-      parsedError.success
-        ? parsedError.data.error.message
-        : `Serwer analizy zwrócił błąd (${response.status}).`,
-    );
+    if (parsedError.success) {
+      throw new AnalyzeError(parsedError.data.error.message, parsedError.data.error.details);
+    }
+    throw new AnalyzeError(`Serwer analizy zwrócił błąd (${response.status}).`);
   }
 
   const parsed = analysisSchema.safeParse(body);

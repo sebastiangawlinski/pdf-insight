@@ -15,7 +15,7 @@ type AppState =
   | { status: 'reading'; file: File }
   | { status: 'analyzing'; file: File }
   | { status: 'success'; analysis: Analysis; fromHistory: boolean }
-  | { status: 'error'; message: string; file: File | null };
+  | { status: 'error'; message: string; details?: string | undefined; file: File | null };
 
 function toUserMessage(error: unknown): string {
   if (error instanceof PdfReadError || error instanceof AnalyzeError) return error.message;
@@ -52,7 +52,12 @@ export default function App() {
       if (!isCurrent()) return;
       // Błędy pliku (skan, hasło, uszkodzenie) nie znikną po ponowieniu — wtedy nie oferujemy retry.
       const retryable = !(error instanceof PdfReadError);
-      setState({ status: 'error', message: toUserMessage(error), file: retryable ? file : null });
+      setState({
+        status: 'error',
+        message: toUserMessage(error),
+        details: error instanceof AnalyzeError ? error.details : undefined,
+        file: retryable ? file : null,
+      });
     }
   }, []);
 
@@ -134,6 +139,7 @@ export default function App() {
         {state.status === 'error' && (
           <ErrorView
             message={state.message}
+            details={state.details}
             onRetry={errorFile ? () => void runAnalysis(errorFile) : undefined}
             onReset={reset}
           />
