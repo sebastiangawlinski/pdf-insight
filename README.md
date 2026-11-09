@@ -30,7 +30,8 @@ Przeglądarka (GitHub Pages)                  Cloudflare Worker                 
 │ 1. walidacja pliku (typ, 10 MB)│ ───────► │ CORS + kontrola Origin   │ ───► │ Llama 4  │
 │ 2. pdf.js → tekst + l. stron   │          │ limit żądań na IP        │ ◄─── │ Scout    │
 │ 4. Zod → widok → eksport .json │ ◄─────── │ prompt + walidacja Zod   │      └──────────┘
-│    historia w localStorage     │   JSON   │ 1 ponowna próba, grounding│
+│    filtr ukrytego tekstu       │   JSON   │ 1 ponowna próba, grounding│
+│    historia w localStorage     │          │ wycinanie poleceń dla AI │
 └────────────────────────────────┘          └──────────────────────────┘
 ```
 
@@ -87,10 +88,23 @@ worker/src/     Cloudflare Worker: routing, CORS, prompt, wywołanie LLM, normal
   nagłówek `Origin` i odrzuca żądania z innych domen (403).
 - Limit żądań: 6 analiz / minutę / IP (Cloudflare Rate Limiting). Limit rozmiaru: plik 10 MB
   (frontend), ciało żądania 2 MB, analizowane maks. 60 tys. znaków (Worker).
-- Prompt injection: treść PDF trafia do modelu w bloku `<document>…</document>`, a instrukcja
-  systemowa traktuje ją jako dane. Znaczniki, którymi tekst mógłby „wyjść” z bloku, są
-  neutralizowane. Dodatkowo grounding (pkt 6) i walidacja schematu ograniczają skutki
-  ewentualnej manipulacji.
+- **Prompt injection — ochrona warstwowa.** Zasada: bezpieczeństwo nie zależy od tego, czy model
+  „posłucha”. Model nie ma żadnych uprawnień (nie wysyła maili, nie ma dostępu do danych), więc
+  w najgorszym razie atak może zepsuć tekst wyniku — a kolejne warstwy to ograniczają:
+  1. **Filtr niewidocznego tekstu** (przeglądarka) — tekst mniejszy niż 5,5 pt lub poza stroną
+     nie trafia do analizy. Testowy PDF ukrywa polecenie białą czcionką 5 pt.
+  2. **Wykrywanie poleceń dla AI** (Worker, przed modelem) — wiersze z typowymi frazami
+     (PL/EN: „zignoruj wcześniejsze polecenia”, „instrukcja dla AI”, „ignore previous
+     instructions”, „SYSTEM:”…) są wycinane razem z kontynuacją złamanego zdania.
+  3. **Losowy znacznik bloku** — treść trafia do modelu w `<document-{losowy id}>…</…>`, innym
+     przy każdym zapytaniu, więc autor PDF nie może podrobić końca bloku. Instrukcja systemowa
+     traktuje wszystko w bloku jako dane; żadne „hasło” ani „polecenie administratora” z treści
+     niczego nie odblokowuje.
+  4. **Walidacja schematu** i **grounding** — kwota musi występować w (oczyszczonym) tekście jako
+     kwota pieniężna, z tą samą walutą; data — jako data. Zwykłe liczby („Strona 1 z 12”) nie
+     wystarczą.
+  5. **Przejrzystość** — wynik zawiera `meta.security` i widoczne ostrzeżenie z listą
+     pominiętych fragmentów.
 - Bez `dangerouslySetInnerHTML` — cały tekst renderuje React (escapowanie).
 - Użytkownik widzi informację, że tekst pliku trafia do zewnętrznego API AI.
 
@@ -154,7 +168,7 @@ lint › testy › build › deploy.
 
 Testy jednostkowe (Vitest) obejmują m.in.: walidację schematu (wymagane pola, ISO 8601,
 ISO 639-1, ISO 4217, liczba punktów), normalizację odpowiedzi modelu, mechanizm jednej ponownej
-próby, grounding kwot i dat, ochronę przed wyjściem z bloku `<document>`, dzielenie i łączenie
+próby, grounding kwot i dat, wykrywanie poleceń dla AI, filtr ukrytego tekstu, losowy znacznik bloku, dzielenie i łączenie
 długich dokumentów, CORS i walidację żądań Workera, historię w `localStorage` oraz walidację plików.
 
 ## Znane ograniczenia
@@ -164,8 +178,12 @@ długich dokumentów, CORS i walidację żądań Workera, historię w `localStor
   użytkownik zobaczy komunikat o chwilowym limicie.
 - Dokumenty dłuższe niż ~60 tys. znaków są analizowane częściowo (informacja w wyniku
   i w `meta.truncated`).
-- Grounding sprawdza, czy liczba/data **występuje** w dokumencie, a nie czy model dobrze opisał
+- Grounding sprawdza, czy kwota/data **występuje** w dokumencie, a nie czy model dobrze opisał
   jej kontekst.
+- Ochrona przed prompt injection jest heurystyczna: wykrywanie fraz można obejść innym
+  sformułowaniem, a tekstu ukrytego kolorem (bez zmniejszonej czcionki) lub pod obrazkiem filtr
+  nie wykrywa. Dlatego działa kilka niezależnych warstw — żadna nie jest stuprocentowa.
+- Filtr ukrytego tekstu może pominąć prawdziwy, bardzo drobny druk (< 5,5 pt).
 - Model może się mylić w ocenie typu dokumentu czy doborze kluczowych punktów — wynik zawiera
   dopisek, by ważne informacje sprawdzić w oryginale.
 - Tekst dokumentu jest przetwarzany przez zewnętrznego dostawcę AI — aplikacja nie jest
