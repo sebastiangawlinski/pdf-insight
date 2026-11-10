@@ -95,7 +95,7 @@ export type SecurityReport = z.infer<typeof securityReportSchema>;
 
 /** Dodatkowe informacje techniczne (brief pozwala dodawać pola). */
 export const analysisMetaSchema = z.object({
-  /** Faktycznie użyte modele, np. "Workers AI / @cf/meta/llama-3.3-70b-instruct-fp8-fast". */
+  /** Faktycznie użyte modele, np. "Workers AI / @cf/google/gemma-4-26b-a4b-it". */
   model: z.string(),
   /** Dostawca (lub dostawcy) AI, który wykonał analizę. */
   provider: z.string(),
@@ -146,7 +146,7 @@ export function toOrderedAnalysis(analysis: Analysis): Analysis {
   };
 }
 
-/** Zamienia błędy Zod na krótki, czytelny opis (do logów i do ponownej próby modelu). */
+/** Zamienia błędy Zod na krótki, czytelny opis (przekazywany modelowi przy ponownej próbie). */
 export function describeIssues(error: z.ZodError): string {
   return error.issues
     .slice(0, 8)
